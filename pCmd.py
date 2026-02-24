@@ -2340,3 +2340,345 @@ def doGaskets(propList=[], pypeline=None):
     FreeCAD.activeDocument().commitTransaction()
     FreeCAD.activeDocument().recompute()
     return glist
+
+def makeBeam(propList=[], pos=None, Z=None):
+    """Add a Beam structural section object.
+    makeBeam(propList, pos, Z)
+      propList elements:
+        rating  (str)   : section standard, e.g. "HEA"
+        SSize   (str)   : section designation, e.g. "HEA200"
+        stype   (str)   : profile type code: "H", "R", "RH", "U", "L", "T", "circle"
+        H       (float) : section height (mm)
+        W       (float) : section width (mm)
+        ta      (float) : web / wall thickness (mm)
+        tf      (float) : flange thickness (mm)
+        Height  (float) : beam length (mm)
+      pos (vector): insertion point; default = origin
+      Z   (vector): axis direction; default = +Z
+    """
+    import fFeatures
+    if pos is None:
+        pos = FreeCAD.Vector(0, 0, 0)
+    if Z is None:
+        Z = FreeCAD.Vector(0, 0, 1)
+    a = FreeCAD.ActiveDocument.addObject("Part::FeaturePython", "Beam")
+    if len(propList) == 8:
+        fFeatures.Beam(a, *propList)
+    else:
+        fFeatures.Beam(a)
+    fFeatures.ViewProviderBeam(a.ViewObject)
+    a.Placement.Base = pos
+    rot = FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), Z)
+    a.Placement.Rotation = rot.multiply(a.Placement.Rotation)
+    a.Label = translate("Objects", "Beam")
+    return a
+
+
+def doBeams(propList=[], frameline=None):
+    """Insert one or more Beam objects at the current selection.
+    propList: see makeBeam() for element order.
+    frameline: label of a FrameLine group to add the beam to (optional).
+
+    Selection behaviour mirrors doPipes():
+      - ported object selected -> snap Port[0] to that port
+      - straight edge selected -> align along edge, set Height to edge length
+      - curved edge selected   -> align to edge axis at centre of curvature
+      - vertex selected        -> place at vertex, default orientation
+      - nothing selected       -> place at origin
+    """
+    FreeCAD.activeDocument().openTransaction(translate("Transaction", "Insert beam"))
+    blist = []
+    try:
+        selex = FreeCADGui.Selection.getSelectionEx()[0]
+        usablePorts = (
+            hasattr(selex.Object, "Ports")
+            and hasattr(selex.Object, "FType")
+            and selex.Object.FType != "Any"
+        )
+
+        pos, Z, srcObj, srcPort = getAttachmentPoints()
+
+        # If a straight edge was selected, override Height to match edge length
+        edgeLen = None
+        eds = fCmd.edges([selex])
+        if eds and eds[0].curvatureAt(0) == 0:
+            edgeLen = eds[0].Length
+
+        if usablePorts:
+            beam = makeBeam(propList, pos, Z)
+            if edgeLen is not None:
+                beam.Height = edgeLen
+            blist.append(beam)
+            FreeCAD.activeDocument().commitTransaction()
+            FreeCAD.activeDocument().recompute()
+            alignTwoPorts(beam, 0, srcObj, srcPort)
+        else:
+            beam = makeBeam(propList, pos, Z)
+            if edgeLen is not None:
+                beam.Height = edgeLen
+            blist.append(beam)
+
+    except Exception:
+        blist.append(makeBeam(propList))
+
+    if frameline:
+        for b in blist:
+            _moveToFrameLine(b, frameline)
+
+    FreeCAD.activeDocument().commitTransaction()
+    FreeCAD.activeDocument().recompute()
+    return blist
+
+
+def _moveToFrameLine(obj, flName):
+    """Move obj into the group of FrameLine flName (analogous to moveToPyLi)."""
+    try:
+        fl = FreeCAD.ActiveDocument.getObjectsByLabel(flName)[0]
+        group = FreeCAD.ActiveDocument.getObjectsByLabel(str(fl.Group))[0]
+        group.addObject(obj)
+    except Exception:
+        pass
+
+
+def makeOutlet(propList=[], pos=None, rot=None):
+    """
+    makeOutlet(propList, pos, rot)
+
+    Creates and returns a single Outlet object.
+
+    propList elements:
+      [0]  rating   str    "Sch-STD" | "3000lb" etc.
+      [1]  DN       str    "DN50"
+      [2]  OD       float  outside diameter at pipe end  (mm)
+      [3]  thk      float  wall thickness at pipe end    (mm)
+      [4]  A        float  height above run-pipe surface (mm)
+      [5]  B        float  outer diameter at base        (mm)
+      [6]  endType  str    "BW" or "SW"  (from CSV Conn column)
+      [7]  angle    int    0 (straight) | 45 (lateral)
+      [8]  E        float  socket depth (SW only)
+
+    pos : FreeCAD.Vector    - world position of the fitting base
+    rot : FreeCAD.Rotation  - full world rotation (replaces the old Z-only arg)
+                              If None, identity rotation is used.
+    """
+    if pos is None:
+        pos = FreeCAD.Vector(0, 0, 0)
+    if rot is None:
+        rot = FreeCAD.Rotation()
+
+    a = FreeCAD.ActiveDocument.addObject("Part::FeaturePython", "Outlet")
+    if len(propList) >= 9:
+        pFeatures.Outlet(a, *propList)
+    elif len(propList) >= 8:
+        pFeatures.Outlet(a, *propList, E=0.0)
+    else:
+        pFeatures.Outlet(a)
+
+    ViewProvider(a.ViewObject, "Quetzal_InsertOutlet")
+    a.Placement = FreeCAD.Placement(pos, rot)
+    FreeCAD.ActiveDocument.recompute()
+    a.Label = translate("Objects", "Outlet")
+    return a
+
+
+# ---- placement helpers --------------------------------------------------------
+
+def outletPlacementOnPipe(pipeObj, t, phi_deg, alpha_deg=0.0):
+    """
+    Return (pos_world, rot_world) for an outlet on a Pipe's outer surface.
+
+    pipeObj   : FreeCAD Pipe object
+    t         : float  - axial distance from Port[0] (mm).  Range 0..Height.
+    phi_deg   : float  - circumferential angle (deg) from pipe local +X,
+                         measured CCW when viewed from Port[1].
+    alpha_deg : float  - spin of the fitting around its own outward axis (deg).
+                         For straight fittings this has no visible effect.
+                         For 45-deg lateral: 0 = branch points along pipe axis,
+                         90 = branch points circumferentially.
+
+    Returns (pos_world, rot_world) where rot_world is a FreeCAD.Rotation.
+    """
+    import math
+    phi = math.radians(phi_deg)
+    r   = float(pipeObj.OD) / 2.0
+
+    # Local attachment point and outward radial direction
+    local_pos = FreeCAD.Vector(r * math.cos(phi), r * math.sin(phi), t)
+    local_dir = FreeCAD.Vector(math.cos(phi), math.sin(phi), 0.0)
+
+    pos_world = pipeObj.Placement.multVec(local_pos)
+    Z_world   = pipeObj.Placement.Rotation.multVec(local_dir).normalize()
+
+    # Base rotation: align fitting local +Z with Z_world
+    base_rot = FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), Z_world)
+
+    # Spin rotation around Z_world.
+    # Reference (alpha=0): fitting local +Y aligns with pipe run axis.
+    # Compute alpha_offset = angle from base_rot.multVec(Y) to pipe_axis_world,
+    # measured around Z_world.
+    pipe_axis = pipeObj.Placement.Rotation.multVec(
+        FreeCAD.Vector(0, 0, 1)).normalize()
+    mapped_Y  = base_rot.multVec(FreeCAD.Vector(0, 1, 0)).normalize()
+    e2        = Z_world.cross(mapped_Y).normalize()
+    alpha_offset = math.degrees(math.atan2(
+        pipe_axis.dot(e2), pipe_axis.dot(mapped_Y)))
+
+    spin_rot  = FreeCAD.Rotation(Z_world, alpha_deg + alpha_offset)
+    final_rot = spin_rot.multiply(base_rot)
+
+    return pos_world, final_rot
+
+
+def outletPlacementOnTee(teeObj, t, phi_deg, alpha_deg=0.0):
+    """
+    Return (pos_world, rot_world) for an outlet on a Tee's run-pipe surface.
+
+    t         : float  - distance from Port[0] of the run (z=-C).  Range 0..2C.
+    phi_deg   : float  - circumferential angle (deg) from tee local +X.
+                         Branch is at ~90 deg (+Y); opposite branch = 270 deg.
+    alpha_deg : float  - spin around fitting axis.  0 = branch along run axis.
+    """
+    import math
+    phi = math.radians(phi_deg)
+    r   = float(teeObj.OD) / 2.0
+    C   = float(teeObj.C)
+
+    z_local   = -C + t
+    local_pos = FreeCAD.Vector(r * math.cos(phi), r * math.sin(phi), z_local)
+    local_dir = FreeCAD.Vector(math.cos(phi), math.sin(phi), 0.0)
+
+    pos_world = teeObj.Placement.multVec(local_pos)
+    Z_world   = teeObj.Placement.Rotation.multVec(local_dir).normalize()
+
+    base_rot  = FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), Z_world)
+
+    # Reference: alpha=0 aligns branch with tee run axis (local +Z of tee)
+    run_axis  = teeObj.Placement.Rotation.multVec(
+        FreeCAD.Vector(0, 0, 1)).normalize()
+    mapped_Y  = base_rot.multVec(FreeCAD.Vector(0, 1, 0)).normalize()
+    e2        = Z_world.cross(mapped_Y).normalize()
+    alpha_offset = math.degrees(math.atan2(
+        run_axis.dot(e2), run_axis.dot(mapped_Y)))
+
+    spin_rot  = FreeCAD.Rotation(Z_world, alpha_deg + alpha_offset)
+    final_rot = spin_rot.multiply(base_rot)
+
+    return pos_world, final_rot
+
+
+def outletPlacementOnElbow(elbowObj, alpha_deg=0.0):
+    """
+    Return (pos_world, rot_world) for an outlet at the outer midpoint of an Elbow.
+
+    alpha_deg : float - spin around the fitting's outward axis (deg).
+                0 = lateral branch points along the elbow run direction at the
+                    midpoint (arc tangent direction), consistent with the
+                    pipe/tee convention where 0 = branch along run axis.
+    """
+    import math
+    BR = float(elbowObj.BendRadius)
+    BA = float(elbowObj.BendAngle)
+    OD = float(elbowObj.OD)
+
+    half_rad = math.radians(BA / 2.0)
+    d        = BR * math.sqrt(2) - BR / math.cos(half_rad)
+    offset   = d * math.cos(math.pi / 4.0)
+    arc_cx   = BR - offset
+    arc_cy   = BR - offset
+
+    a_mid  = math.radians(225.0)
+    mid_x  = arc_cx + BR * math.cos(a_mid)
+    mid_y  = arc_cy + BR * math.sin(a_mid)
+    nx     = math.cos(a_mid)   # outward normal components
+    ny     = math.sin(a_mid)
+
+    local_pos = FreeCAD.Vector(mid_x + (OD / 2.0) * nx,
+                               mid_y + (OD / 2.0) * ny, 0.0)
+    local_dir = FreeCAD.Vector(nx, ny, 0.0)
+
+    pos_world = elbowObj.Placement.multVec(local_pos)
+    Z_world   = elbowObj.Placement.Rotation.multVec(local_dir).normalize()
+
+    # Base rotation: align fitting local +Z with Z_world
+    base_rot  = FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), Z_world)
+
+    # Reference direction for alpha=0: arc tangent at the midpoint in local coords.
+    # Arc tangent at theta = (-sin(theta), cos(theta), 0).
+    # At theta=225 deg this is (sin45, -cos45, 0) = (sqrt2/2, -sqrt2/2, 0).
+    local_tangent = FreeCAD.Vector(-math.sin(a_mid), math.cos(a_mid), 0.0)
+    arc_tangent_world = elbowObj.Placement.Rotation.multVec(
+        local_tangent).normalize()
+
+    # Compute alpha_offset so that alpha=0 aligns local +Y with arc tangent
+    mapped_Y     = base_rot.multVec(FreeCAD.Vector(0, 1, 0)).normalize()
+    e2           = Z_world.cross(mapped_Y).normalize()
+    alpha_offset = math.degrees(math.atan2(
+        arc_tangent_world.dot(e2), arc_tangent_world.dot(mapped_Y)))
+
+    spin_rot  = FreeCAD.Rotation(Z_world, alpha_deg + alpha_offset)
+    final_rot = spin_rot.multiply(base_rot)
+
+    return pos_world, final_rot
+
+
+def doOutlets(propList=None, pypeline=None,
+              srcObj=None, t=None, phi_deg=None, alpha_deg=0.0):
+    """
+    Insert an Outlet fitting on the outer surface of srcObj (or current selection).
+
+    propList : list  - see makeOutlet().
+    pypeline : str   - PypeLine label (optional).
+    srcObj   : the host Pipe / Tee / Elbow.  None = use FreeCAD selection.
+    t        : float - axial position (mm).  None = default for object type.
+    phi_deg  : float - circumferential angle (deg).  None = default.
+    alpha_deg: float - spin around fitting axis (deg).  0 = branch along run axis.
+    """
+    if propList is None:
+        propList = ["Sch-STD", "DN50", 60.32, 3.91, 45.0, 70.0, "BW", 0, 0.0]
+
+    if srcObj is None:
+        selex = FreeCADGui.Selection.getSelectionEx()
+        if selex:
+            srcObj = selex[0].Object
+
+    pos = None
+    rot = None
+
+    if srcObj is not None and hasattr(srcObj, "PType"):
+        ptype = srcObj.PType
+
+        if ptype == "Pipe":
+            H       = float(srcObj.Height)
+            t_use   = H / 2.0 if t is None else max(0.0, min(t, H))
+            phi_use = 0.0     if phi_deg is None else phi_deg
+            pos, rot = outletPlacementOnPipe(srcObj, t_use, phi_use, alpha_deg)
+
+        elif ptype == "Tee":
+            C       = float(srcObj.C)
+            t_use   = C     if t is None else max(0.0, min(t, 2.0 * C))
+            phi_use = 270.0 if phi_deg is None else phi_deg
+            pos, rot = outletPlacementOnTee(srcObj, t_use, phi_use, alpha_deg)
+
+        elif ptype == "Elbow":
+            pos, rot = outletPlacementOnElbow(srcObj, alpha_deg)
+
+    if pos is None:
+        try:
+            pos, Z_dir, _src, _port = getAttachmentPoints()
+            if Z_dir is not None:
+                rot = FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), Z_dir)
+        except Exception:
+            pass
+    if pos is None:
+        pos = FreeCAD.Vector(0, 0, 0)
+    if rot is None:
+        rot = FreeCAD.Rotation()
+
+    FreeCAD.activeDocument().openTransaction(
+        translate("Transaction", "Insert outlet"))
+    obj = makeOutlet(propList, pos, rot)
+    if pypeline:
+        moveToPyLi(obj, pypeline)
+    FreeCAD.activeDocument().commitTransaction()
+    FreeCAD.activeDocument().recompute()
+    return [obj]

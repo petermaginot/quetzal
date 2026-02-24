@@ -740,6 +740,12 @@ class Tee(pypeType):
             "Tee",
             QT_TRANSLATE_NOOP("App::Property", "Branch length"),
         ).M
+        obj.addProperty(
+            "App::PropertyLength",
+            "offset",
+            "Tee",
+            QT_TRANSLATE_NOOP("App::Property", "Straight tee offset length"),
+        ).offset
         #If branch diameter is equal to run, set branch OD, thickness, and length to be equal to branch's
         if not thk2:
             obj.thk2 = thk
@@ -758,6 +764,8 @@ class Tee(pypeType):
         obj.OD = OD
         obj.thk = thk
         obj.C = C
+
+        obj.offset = 1.0 #mm offset for straight tee 
         
         obj.addProperty(
             "App::PropertyString",
@@ -768,43 +776,91 @@ class Tee(pypeType):
         
     def onChanged(self, fp, prop):
         return None
-
+    
     def execute(self, fp):
         
         fp.Profile = str(fp.OD) + "x" + str(fp.OD2)        
-            
+        #make basic tee shape first, then add fillet (for reducing tee) or quarter torus (for straight tee)
         Base = Part.makeCylinder(fp.OD/2, fp.C*2, FreeCAD.Vector(0, 0, -fp.C), FreeCAD.Vector(0, 0, 1), ) #run tube
         BranchTube = Part.makeCylinder(fp.OD2/2, fp.M, FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 1, 0),  )
         RunHole = Part.makeCylinder(fp.OD/2 - fp.thk, fp.C*2, FreeCAD.Vector(0, 0, -fp.C), FreeCAD.Vector(0, 0, 1), )
         BranchHole = Part.makeCylinder(fp.OD2/2 - fp.thk2, fp.M, FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 1, 0),  )
-        
-        CommonOD = Base.common(BranchTube)
-        CommonID = RunHole.common(BranchHole)
-
         Base = Base.fuse(BranchTube)
 
-        Base = Base.cut(RunHole)
-        Base = Base.cut(BranchHole)
-        
-        #Filleting to make the shape look more like an actual tee does not work. Need to figure out why. 
-        ##Fillet edges are Edge 4 and 10 for reducing tees and 5, 6, 7, 14, 15, 16 for straight tees
 
-        #ODFillet = CommonOD.makeFillet(fp.M/2-fp.OD/4, CommonOD.Edges)
-        #IDFillet = CommonID.makeFillet(fp.M/2-fp.OD/4, CommonID.Edges)
-        
-        #Base = Base.fuse(ODFillet)
-        #Base = Base.fuse(IDFillet)
 
-        """ Alternate way of filleting directly doesn't work. Also can't figure out why.
-        if fp.M==fp.C :
-            commonEdges = [Base.Edges[5], Base.Edges[6], Base.Edges[7], Base.Edges[14], Base.Edges[15], Base.Edges[16]]
+        if fp.M == fp.C:
+            #model as quarter torus centered 1 mm off of OD, with a diameter of OD, mirrored across XY plane. Can add internal torus at some point perhaps if you feel like it.
+            #1 mm offset
             
+            
+            quarterTorus = Part.makeTorus((fp.OD + fp.offset)/2, fp.OD/2, FreeCAD.Vector(0,(fp.OD+fp.offset)/2,-(fp.OD+fp.offset)/2), FreeCAD.Vector(1,0,0),-180,180,90)
+            box = Part.makeBox(fp.OD, (fp.OD+fp.offset)/2, (fp.OD+fp.offset)/2,FreeCAD.Vector(-fp.OD/2,0,0), FreeCAD.Vector(0,0,1))
+            cutcylinder = Part.makeCylinder((fp.OD+fp.offset)/2, fp.OD, FreeCAD.Vector(-fp.OD/2,(fp.OD+fp.offset)/2,(fp.OD+fp.offset)/2),FreeCAD.Vector(1,0,0))
+            box = box.cut(cutcylinder)
+            quarterTorus = quarterTorus.fuse(box)
+            mirror_img = quarterTorus.mirror(FreeCAD.Vector(0,0,0), FreeCAD.Vector(0,0,1))
+            centerTee = quarterTorus.fuse(mirror_img)
+            Base = Part.makeCylinder(fp.OD/2, fp.C*2, FreeCAD.Vector(0, 0, -fp.C), FreeCAD.Vector(0, 0, 1), ) #run tube
+            BranchTube = Part.makeCylinder(fp.OD2/2, fp.M, FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 1, 0),  )
+            RunHole = Part.makeCylinder(fp.OD/2 - fp.thk, fp.C*2, FreeCAD.Vector(0, 0, -fp.C), FreeCAD.Vector(0, 0, 1), )
+            BranchHole = Part.makeCylinder(fp.OD2/2 - fp.thk2, fp.M, FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 1, 0),  )
+            Base = Base.fuse(BranchTube)
+            Base = Base.fuse(centerTee)
+            Base = Base.cut(RunHole)
+            Base = Base.cut(BranchHole)
+            Base = Base.removeSplitter()
         else:
-            commonEdges = [Base.Edges[4], Base.Edges[10]]
+            Base = Part.makeCylinder(fp.OD/2, fp.C*2, FreeCAD.Vector(0, 0, -fp.C), FreeCAD.Vector(0, 0, 1), ) #run tube
+            BranchTube = Part.makeCylinder(fp.OD2/2, fp.M, FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 1, 0),  )
+            RunHole = Part.makeCylinder(fp.OD/2 - fp.thk, fp.C*2, FreeCAD.Vector(0, 0, -fp.C), FreeCAD.Vector(0, 0, 1), )
+            BranchHole = Part.makeCylinder(fp.OD2/2 - fp.thk2, fp.M, FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 1, 0),  )
+            Base = Base.fuse(BranchTube)
+            Base = Base.cut(RunHole)
+            Base = Base.cut(BranchHole)
+            Base = Base.removeSplitter()
+        
 
-        Base = Base.makeFillet(fp.M/2-fp.OD/4, commonEdges)
-        #Base = Base.fuse(ODFillet)
-        """
+            # Identify the intersection edges geometrically:
+            # They are the edges shared between the run cylinder surface and the
+            # branch cylinder surface -- i.e. edges whose midpoint lies on BOTH
+            # the run OD surface (distance from Z-axis == OD/2) and the branch OD
+            # surface (distance from Y-axis == OD2/2), within a small tolerance.
+            import math
+            tol = 0.5  # mm -- generous enough for floating-point geometry
+
+            fillet_edges = []
+            for edge in Base.Edges:
+                try:
+                    mid = edge.valueAt(
+                        (edge.FirstParameter + edge.LastParameter) / 2.0
+                    )
+                    # Distance from the Z axis (run cylinder axis)
+                    dist_run    = math.sqrt(mid.x ** 2 + mid.y ** 2)
+                    # Distance from the Y axis (branch cylinder axis)
+                    dist_branch = math.sqrt(mid.x ** 2 + mid.z ** 2)
+
+                    on_run_od    = abs(dist_run    - float(fp.OD)  / 2) < tol
+                    on_branch_od = abs(dist_branch - float(fp.OD2) / 2) < tol
+
+                    if on_run_od and on_branch_od:
+                        fillet_edges.append(edge)
+                except Exception:
+                    continue
+
+            # Apply fillet only when valid intersection edges were found
+            if fillet_edges:
+                fillet_r = fp.M/2-fp.OD/4
+                try:
+                    Base = Base.makeFillet(fillet_r, fillet_edges)
+                except Exception as e:
+                    # Fillet failed -- fall back to unfilleted shape rather than
+                    # crashing the whole recompute
+                    FreeCAD.Console.PrintWarning(
+                        "Tee fillet failed (r={:.2f}mm): {} -- using unfilleted shape\n"
+                        .format(fillet_r, e)
+                    )
+
         fp.Shape = Base
         fp.Ports = [FreeCAD.Vector(0, 0, -float(fp.C)), FreeCAD.Vector(0, 0, float(fp.C)), FreeCAD.Vector(0, float(fp.M), 0)]
         fp.PortDirections = [FreeCAD.Vector(0, 0, -1), 
@@ -812,7 +868,7 @@ class Tee(pypeType):
                       FreeCAD.Vector(0, 1, 0)]
         super(Tee, self).execute(fp)  # perform common operations
 
-
+    
 class Reduct(pypeType):
     """Class for object PType="Reduct"
     Reduct(obj,[PSize="DN50",OD=60.3, OD2= 48.3, thk=3, thk2=None, H=None, conc=True])
@@ -1691,3 +1747,228 @@ class Gasket(pypeType):
         ]
 
         super(Gasket, self).execute(fp)  # perform common operations
+
+class Outlet(pypeType):
+    """
+    Class for object PType="Outlet"
+
+    Models integrally-reinforced branch connections that attach to the face of a run pipe, tee orelbow.
+
+    Outlet(obj, rating, DN, OD, thk, A, B,
+           endType="ButtWeld", angle=0, E=0)
+
+    Parameters
+    ----------
+    obj       : App::FeaturePython object
+    rating    : string  schedule (ButtWeld) or class (SocketWeld)
+    DN        : string  nominal size  e.g. "DN50"
+    OD        : float   outside diameter at the pipe-connection end
+    thk       : float   wall thickness at the pipe-connection end
+    A         : float   height of the fitting above the run-pipe surface
+                         (measured along the fitting axis)
+    B         : float   outer diameter at the base (run-pipe attachment)
+    endType   : "ButtWeld" | "SocketWeld"
+    angle     : 0 (straight)  |  45 (lateral/elbow)
+    E         : float   socket depth (SocketWeld only); the port sits here
+
+    Coordinate convention (local, before placement)
+    ------------------------------------------------
+    Origin  = the point where the fitting axis pierces the run-pipe surface.
+    +Z      = outward along the fitting axis.
+    Port[0] is at (0, 0, A) for straight, (0, A/√2, A/√2) for 45-degree.
+    Port direction faces outward from the fitting end.
+
+    For a 45-degree (lateral) variant the entire body is built straight then
+    rotated 45° around the local X-axis, and the portion below z=0 is removed
+    by a boolean cut with a half-space solid, leaving the elliptical base that
+    sits on the run-pipe surface.
+    """
+
+    def __init__(
+        self,
+        obj,
+        rating  = "Sch-STD",
+        DN      = "DN50",
+        OD      = 60.32,
+        thk     = 3.91,
+        A       = 45.0,
+        B       = 70.0,
+        endType = "ButtWeld",
+        angle   = 0,
+        E       = 0.0,
+    ):
+        super(Outlet, self).__init__(obj)
+
+        obj.PType   = "Outlet"
+        obj.Proxy   = self
+        obj.PRating = rating
+        obj.PSize   = DN
+
+        # ── Geometry properties ───────────────────────────────────────────
+        obj.addProperty(
+            "App::PropertyLength", "OD", "Outlet",
+            QT_TRANSLATE_NOOP("App::Property", "Outside diameter at pipe end"),
+        ).OD = OD
+
+        obj.addProperty(
+            "App::PropertyLength", "thk", "Outlet",
+            QT_TRANSLATE_NOOP("App::Property", "Wall thickness at pipe end"),
+        ).thk = thk
+
+        obj.addProperty(
+            "App::PropertyLength", "A", "Outlet",
+            QT_TRANSLATE_NOOP("App::Property",
+                "Height above run-pipe surface (along fitting axis)"),
+        ).A = A
+
+        obj.addProperty(
+            "App::PropertyLength", "B", "Outlet",
+            QT_TRANSLATE_NOOP("App::Property", "Outer diameter at base attachment"),
+        ).B = B
+
+        obj.addProperty(
+            "App::PropertyLength", "E", "Outlet",
+            QT_TRANSLATE_NOOP("App::Property",
+                "Socket depth – bore steps from ID to OD at this height "
+                "(SocketWeld only)"),
+        ).E = E if E else 0.0
+
+        # ── Type / style ──────────────────────────────────────────────────
+        obj.addProperty(
+            "App::PropertyString", "EndType", "Outlet",
+            QT_TRANSLATE_NOOP("App::Property",
+                "ButtWeld (tapered body) or SocketWeld (cylindrical body)"),
+        ).EndType = endType
+
+        obj.addProperty(
+            "App::PropertyInteger", "Angle", "Outlet",
+            QT_TRANSLATE_NOOP("App::Property",
+                "Branch angle: 0 = straight, "
+                "45 = lateral "),
+        ).Angle = int(angle)
+
+        obj.addProperty(
+            "App::PropertyString", "Profile", "Outlet",
+            QT_TRANSLATE_NOOP("App::Property", "Section dimensions"),
+        ).Profile = str(OD) + "x" + str(thk)
+
+    # ------------------------------------------------------------------
+    def onChanged(self, fp, prop):
+        return None
+
+    # ------------------------------------------------------------------
+    def execute(self, fp):
+        import math
+
+        OD      = float(fp.OD)
+        thk     = float(fp.thk)
+        A       = float(fp.A)
+        B       = float(fp.B)
+        E       = float(fp.E)
+        endType = str(fp.EndType)
+        angle   = int(fp.Angle)
+
+        ID = OD - 2.0 * thk          # inner diameter at the pipe end
+        r_id = ID / 2.0
+        r_od = OD / 2.0
+        r_B  = B  / 2.0              # base radius
+
+        fp.Profile = str(OD) + "x" + str(thk)
+
+        # ── 1. Build the body in the "straight" (upright) orientation ──
+        #
+        # For straight fittings the body spans z=0 (base) to z=A (top).
+        # For 45-degree lateral fittings we must extend the body BELOW z=0
+        # before rotating so that the clip plane z=0 slices through the full
+        # cylinder cross-section, producing a complete elliptical base.
+        #
+        # After rotating by angle_rad around X, the lowest edge of the base
+        # circle (radius r_B) reaches z = -r_B*sin(angle_rad).  For the entire
+        # base cap to be below the clip plane we need to start the cylinder at
+        # z = -h_ext where h_ext = r_B * tan(angle_rad).  The clip at z>=0 then
+        # cuts through the cylinder SIDE, giving a clean closed ellipse.
+
+        if angle == 45:
+            h_ext = r_B * math.tan(math.radians(angle))
+        else:
+            h_ext = 0.0
+
+        if endType in ("ButtWeld", "BW"):
+            if angle == 45:
+                # For the lateral variant we build a plain cylinder for the
+                # extension below z=0 (constant radius r_B), then a cone from
+                # z=0 upward.  Join them before rotating.
+                ext_cyl = Part.makeCylinder(r_B, h_ext + 0.5,
+                                            FreeCAD.Vector(0, 0, -(h_ext + 0.5)),
+                                            FreeCAD.Vector(0, 0, 1))
+                cone    = Part.makeCone(r_B, r_od, A,
+                                        FreeCAD.Vector(0, 0, 0),
+                                        FreeCAD.Vector(0, 0, 1), 360)
+                outer   = ext_cyl.fuse(cone)
+            else:
+                outer = Part.makeCone(r_B, r_od, A,
+                                      FreeCAD.Vector(0, 0, 0),
+                                      FreeCAD.Vector(0, 0, 1), 360)
+
+            # Inner bore: constant ID, extends through the full height.
+            inner = Part.makeCylinder(r_id, A + h_ext + 1.0,
+                                      FreeCAD.Vector(0, 0, -(h_ext + 0.5)),
+                                      FreeCAD.Vector(0, 0, 1))
+            body = outer.cut(inner)
+
+        else:  # SocketWeld / SW
+            # Outer shell: cylinder from -h_ext to A
+            outer = Part.makeCylinder(r_B, A + h_ext,
+                                      FreeCAD.Vector(0, 0, -h_ext),
+                                      FreeCAD.Vector(0, 0, 1))
+
+            # Inner bore: narrow (ID) from -h_ext to E, then wide (r_od) from E to A.
+            E_clamped = min(E, A - 0.5) if E > 0 else A * 0.3
+            bore_narrow = Part.makeCylinder(r_id, E_clamped + h_ext + 0.5,
+                                            FreeCAD.Vector(0, 0, -(h_ext + 0.5)),
+                                            FreeCAD.Vector(0, 0, 1))
+            bore_wide   = Part.makeCylinder(r_od, A - E_clamped + 0.5,
+                                            FreeCAD.Vector(0, 0, E_clamped),
+                                            FreeCAD.Vector(0, 0, 1))
+            body = outer.cut(bore_narrow).cut(bore_wide)
+
+        # ── 2. Handle the 45-degree lateral variant ─────────────────────
+        #
+        # Rotate the extended body 45° around X, then clip at z>=0.
+        # Because the body now extends to z=-h_ext, the clip plane passes
+        # through the cylinder side (not the base cap), giving a full ellipse.
+
+        if angle == 45:
+            body.rotate(FreeCAD.Vector(0, 0, 0),
+                        FreeCAD.Vector(1, 0, 0), 45)
+            big  = max(B, A) * 4.0
+            clip = Part.makeBox(2 * big, 2 * big, big + 1.0,
+                                FreeCAD.Vector(-big, -big, 0))
+            body = body.common(clip)
+
+        fp.Shape = body
+
+        # ── 3. Set port ──────────────────────────────────────────────────
+        #
+        # The single port is at the open pipe-connection end (top).
+        # Direction faces outward (away from the body).
+        if angle == 45:
+            s2 = math.sqrt(2.0) / 2.0
+            if endType in ("SocketWeld", "SW"):
+                E_clamped = min(E, A - 0.5) if E > 0 else A * 0.3
+                port_pos = FreeCAD.Vector(0, -E_clamped * s2, E_clamped * s2)
+            else:
+                port_pos = FreeCAD.Vector(0, -A * s2, A * s2)
+            port_dir = FreeCAD.Vector(0, -s2, s2)
+        else:
+            if endType in ("SocketWeld", "SW"):
+                E_clamped = min(E, A - 0.5) if E > 0 else A * 0.3
+                port_pos = FreeCAD.Vector(0, 0, E_clamped)
+            else:
+                port_pos = FreeCAD.Vector(0, 0, A)
+            port_dir = FreeCAD.Vector(0, 0, 1)
+
+        fp.Ports          = [port_pos]
+        fp.PortDirections = [port_dir]
+
+        super(Outlet, self).execute(fp)   # positionBySupport()

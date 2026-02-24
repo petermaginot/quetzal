@@ -2295,3 +2295,588 @@ class insertGasketForm(dodoDialogs.protoPypeForm):
             g.SEthk   = float(pq(d["SEthk"]))
             g.Rthk    = float(pq(d["Rthk"]))
         FreeCAD.activeDocument().recompute()
+
+class insertBeamForm(dodoDialogs.protoPypeForm):
+    """
+    Dialog to insert structural beam sections.
+    Selection behaviour:
+      - Select a ported frame object -> beam snaps to that port
+      - Select a straight edge       -> beam aligns to edge, length = edge length
+      - Select a vertex              -> beam placed at vertex, default orientation
+      - Nothing selected             -> beam placed at origin
+    Reverse button keeps Port[0] (the base end) pinned in world space.
+    Apply button updates properties of already-placed beams.
+    """
+
+    def __init__(self):
+        super(insertBeamForm, self).__init__(
+            translate("insertBeamForm", "Insert beam section"),
+            "Beam",          # PType used to filter CSV filenames: Beam_<rating>.csv
+            "HEA",           # default rating shown on open
+            "structure.svg", # replace with a dedicated icon if available
+            x,
+            y,
+        )
+        self.sizeList.setCurrentRow(0)
+        self.ratingList.setCurrentRow(0)
+        self.btn1.clicked.connect(self.insert)
+
+        # Length field and slider (mirrors insertPipeForm)
+        self.edit1 = QLineEdit()
+        self.edit1.setPlaceholderText(translate("insertBeamForm", "<length mm>"))
+        self.edit1.setAlignment(Qt.AlignHCenter)
+        self.edit1.setValidator(QDoubleValidator())
+        self.edit1.editingFinished.connect(lambda: self.sli.setValue(100))
+        self.secondCol.layout().addWidget(self.edit1)
+
+        self.btn2 = QPushButton(translate("insertBeamForm", "Reverse"))
+        self.secondCol.layout().addWidget(self.btn2)
+        self.btn2.clicked.connect(self.reverse)
+
+        self.btn3 = QPushButton(translate("insertBeamForm", "Apply"))
+        self.secondCol.layout().addWidget(self.btn3)
+        self.btn3.clicked.connect(self.apply)
+
+        self.btn1.setDefault(True)
+        self.btn1.setFocus()
+
+        # Vertical length slider
+        self.sli = QSlider(Qt.Vertical)
+        self.sli.setMaximum(200)
+        self.sli.setMinimum(1)
+        self.sli.setValue(100)
+        self.mainHL.addWidget(self.sli)
+        self.sli.valueChanged.connect(self.changeL)
+
+        self.show()
+        self.lastBeam = None
+        self.H = 1000.0   # default length in mm
+
+    def changeL(self, val):
+        """Scale the displayed length proportionally with the slider."""
+        if self.edit1.text():
+            try:
+                base = float(self.edit1.text())
+            except ValueError:
+                base = self.H
+        else:
+            base = self.H
+        self.H = base * val / 100.0
+        self.edit1.setText("{:.1f}".format(self.H))
+
+    def reverse(self):
+        """Flip the last-inserted (or selected) beam, keeping Port[0] pinned."""
+        selBeams = [
+            b for b in FreeCADGui.Selection.getSelection()
+            if hasattr(b, "FType") and b.FType == "Beam"
+        ]
+        target = selBeams[0] if selBeams else self.lastBeam
+        if not target:
+            return
+        initial = target.Placement.multVec(target.Ports[0])
+        pCmd.rotateTheTubeAx(target, FreeCAD.Vector(1, 0, 0), 180)
+        final = target.Placement.multVec(target.Ports[0])
+        target.Placement.move(initial - final)
+
+    def insert(self):
+        d = self.pipeDictList[self.sizeList.currentRow()]
+        if self.edit1.text():
+            try:
+                self.H = float(self.edit1.text())
+            except ValueError:
+                pass
+        self.sli.setValue(100)
+
+        propList = [
+            self.PRating,           # rating / standard
+            d["PSize"],             # SSize designation
+            d["stype"],             # profile type code
+            float(pq(d["H"])),
+            float(pq(d["W"])),
+            float(pq(d["ta"])),
+            float(pq(d["tf"])),
+            self.H,                 # beam length
+        ]
+        self.lastBeam = pCmd.doBeams(propList)
+
+    def apply(self):
+        """Apply currently selected size to already-placed Beam objects."""
+        d = self.pipeDictList[self.sizeList.currentRow()]
+        targets = [
+            b for b in FreeCADGui.Selection.getSelection()
+            if hasattr(b, "FType") and b.FType == "Beam"
+        ]
+        if not targets and self.lastBeam:
+            targets = [self.lastBeam]
+        for b in targets:
+            b.FRating = self.PRating
+            b.SSize   = d["PSize"]
+            b.stype   = d["stype"]
+            b.H       = float(pq(d["H"]))
+            b.W       = float(pq(d["W"]))
+            b.ta      = float(pq(d["ta"]))
+            b.tf      = float(pq(d["tf"]))
+        FreeCAD.activeDocument().recompute()
+
+
+class insertOutletForm(dodoDialogs.protoPypeForm):
+    """
+    Dialog to insert Outlet fittings .
+
+    CSV naming convention (tablez/Outlet_<rating>.csv):
+      PSize ; OD ; thk ; A ; B ; [E ;] Ang ; Conn
+      Ang  = 0  -> straight     Conn = BW -> butt-weld
+      Ang  = 45 -> 45 deg lat.  Conn = SW -> socket-weld
+
+    Position controls (Pipe / Tee host):
+      Axial slider + spinbox  - distance from Port 0 along run axis
+      Rotation dial + spinbox - circumferential angle around run axis (phi)
+        0 deg = pipe/tee local +X
+        Tee default: phi = 270 deg (opposite branch)
+
+    Spin control (45 deg lateral only):
+      Spin dial + spinbox - rotation of the fitting around its own outward axis
+        0 deg = lateral branch points along pipe/tee run axis
+        90 deg = lateral branch points circumferentially
+    """
+
+    def __init__(self):
+        # State attrs must be set BEFORE super().__init__ because
+        # protoPypeForm calls self.fillSizes() during its __init__.
+        self._angFilter   = 0      # 0 = straight, 45 = lateral
+        self._srcObj      = None
+        self._t           = None
+        self._phi         = 0.0
+        self._alpha       = 0.0    # spin around fitting's own outward axis
+        self._t_max       = 1000.0
+        self._updating_ui = False
+        self.lastOutlet   = None
+
+        super(insertOutletForm, self).__init__(
+            translate("insertOutletForm", "Insert Outlet"),
+            "Outlet",
+            "Sch-STD",
+            "Quetzal_InsertOutlet.svg",
+            x,
+            y,
+        )
+
+        # -- Outlet angle radio buttons  (secondCol) -----------------------
+        self.angGroup = QGroupBox(translate("insertOutletForm", "Outlet Angle"))
+        angLayout = QVBoxLayout(self.angGroup)
+        self._angBG    = QButtonGroup(self)
+        self._radioStr = QRadioButton(translate("insertOutletForm", "Straight (0 deg)"))
+        self._radioLat = QRadioButton(translate("insertOutletForm", "45 deg Lateral"))
+        self._radioStr.setChecked(True)
+        self._angBG.addButton(self._radioStr,  0)
+        self._angBG.addButton(self._radioLat, 45)
+        angLayout.addWidget(self._radioStr)
+        angLayout.addWidget(self._radioLat)
+        self.secondCol.layout().addWidget(self.angGroup)
+
+        # -- Position-on-host group  (secondCol) ---------------------------
+        self._posGroup = QGroupBox(
+            translate("insertOutletForm", "Position on Host"))
+        pgLayout = QVBoxLayout(self._posGroup)
+        pgLayout.setSpacing(3)
+
+        # Axial slider row
+        pgLayout.addWidget(QLabel(
+            translate("insertOutletForm", "Distance from Port 0 (mm):")))
+        axRow = QHBoxLayout()
+        self._axSlider = QSlider(Qt.Horizontal)
+        self._axSlider.setMinimum(0)
+        self._axSlider.setMaximum(1000)
+        self._axSlider.setValue(500)
+        self._axSpin = QDoubleSpinBox()
+        self._axSpin.setDecimals(1)
+        self._axSpin.setMinimum(0.0)
+        self._axSpin.setMaximum(10000.0)
+        self._axSpin.setSuffix(" mm")
+        self._axSpin.setFixedWidth(88)
+        axRow.addWidget(self._axSlider)
+        axRow.addWidget(self._axSpin)
+        pgLayout.addLayout(axRow)
+
+        # Circumferential rotation dial row (phi - positions fitting on pipe)
+        pgLayout.addWidget(QLabel(
+            translate("insertOutletForm", "Position angle (deg):")))
+        rotRow = QHBoxLayout()
+        self._dial = QDial()
+        self._dial.setMinimum(0)
+        self._dial.setMaximum(359)
+        self._dial.setValue(0)
+        self._dial.setWrapping(True)
+        self._dial.setNotchesVisible(True)
+        self._dial.setNotchTarget(30)
+        self._dial.setMaximumSize(72, 72)
+        self._rotSpin = QDoubleSpinBox()
+        self._rotSpin.setDecimals(1)
+        self._rotSpin.setMinimum(0.0)
+        self._rotSpin.setMaximum(359.9)
+        self._rotSpin.setSuffix(" deg")
+        self._rotSpin.setWrapping(True)
+        self._rotSpin.setFixedWidth(78)
+        rotRow.addWidget(self._dial)
+        rotRow.addWidget(self._rotSpin, alignment=Qt.AlignVCenter)
+        pgLayout.addLayout(rotRow)
+
+        # Spin dial row (alpha - rotates 45-deg fitting around its own axis)
+        # Hidden when Straight is selected; shown for 45 deg Lateral.
+        self._spinWidget = QWidget()
+        spinLayout = QVBoxLayout(self._spinWidget)
+        spinLayout.setContentsMargins(0, 0, 0, 0)
+        spinLayout.setSpacing(2)
+        spinLayout.addWidget(QLabel(
+            translate("insertOutletForm", "Lateral alignment angle (deg):")))
+        spinHint = QLabel(translate("insertOutletForm",
+            "0 deg = branch along pipe axis"))
+        spinHint.setStyleSheet("color: grey; font-size: 9pt;")
+        spinLayout.addWidget(spinHint)
+        spinRow = QHBoxLayout()
+        self._spinDial = QDial()
+        self._spinDial.setMinimum(-180)
+        self._spinDial.setMaximum(180)
+        self._spinDial.setValue(0)
+        self._spinDial.setWrapping(True)
+        self._spinDial.setNotchesVisible(True)
+        self._spinDial.setNotchTarget(30)
+        self._spinDial.setMaximumSize(72, 72)
+        self._spinSpin = QDoubleSpinBox()
+        self._spinSpin.setDecimals(1)
+        self._spinSpin.setMinimum(-180.0)
+        self._spinSpin.setMaximum(180.0)
+        self._spinSpin.setSuffix(" deg")
+        self._spinSpin.setWrapping(True)
+        self._spinSpin.setFixedWidth(78)
+        spinRow.addWidget(self._spinDial)
+        spinRow.addWidget(self._spinSpin, alignment=Qt.AlignVCenter)
+        spinLayout.addLayout(spinRow)
+        self._spinWidget.hide()   # only visible for 45 deg lateral
+
+        self._posHint = QLabel("")
+        self._posHint.setWordWrap(True)
+        self._posHint.setStyleSheet("color: grey; font-size: 9pt;")
+        pgLayout.addWidget(self._posHint)
+
+        self.secondCol.layout().addWidget(self._posGroup)
+        # _spinWidget is outside _posGroup so it remains visible for elbows
+        self.secondCol.layout().addWidget(self._spinWidget)
+
+        # -- Extra buttons  (secondCol) ------------------------------------
+        self.btn2 = QPushButton(translate("insertOutletForm", "Reverse"))
+        self.btn3 = QPushButton(translate("insertOutletForm", "Apply"))
+        self.secondCol.layout().addWidget(self.btn2)
+        self.secondCol.layout().addWidget(self.btn3)
+
+        # -- Signals -------------------------------------------------------
+        self._radioStr.toggled.connect(self._onAngChanged)
+        self._radioLat.toggled.connect(self._onAngChanged)
+        self.ratingList.itemClicked.connect(self._changeRating)
+        self.btn1.clicked.connect(self.insert)
+        self.btn2.clicked.connect(self.reverse)
+        self.btn3.clicked.connect(self.apply)
+        self._axSlider.valueChanged.connect(self._onSliderChanged)
+        self._axSpin.valueChanged.connect(self._onAxSpinChanged)
+        self._dial.valueChanged.connect(self._onDialChanged)
+        self._rotSpin.valueChanged.connect(self._onRotSpinChanged)
+        self._spinDial.valueChanged.connect(self._onSpinDialChanged)
+        self._spinSpin.valueChanged.connect(self._onSpinSpinChanged)
+
+        self.btn1.setDefault(True)
+        self.btn1.setFocus()
+
+        # -- Initial fill --------------------------------------------------
+        self.fillSizes()
+        self.sizeList.setCurrentRow(0)
+        self.ratingList.setCurrentRow(0)
+        self._detectHostObject()
+
+        self.show()
+        self.lastOutlet = None
+
+    # =======================================================================
+    # Overridden: fillSizes  -  filter rows by _angFilter
+    # =======================================================================
+
+    def fillSizes(self):
+        self.sizeList.clear()
+        self.pipeDictList = []
+        fname = "Outlet_" + self.PRating + ".csv"
+        fpath = join(dirname(abspath(__file__)), "tablez", fname)
+        try:
+            with open(fpath, "r") as fh:
+                all_rows = list(csv.DictReader(fh, delimiter=";"))
+        except Exception:
+            return
+        ang_str = str(self._angFilter)
+        for row in all_rows:
+            if row.get("Ang", "0") == ang_str:
+                self.pipeDictList.append(row)
+                label = (row["PSize"] + "  " + row["OD"] + "x" + row["thk"]
+                         + "  " + row.get("Conn", ""))
+                self.sizeList.addItem(label)
+
+    # =======================================================================
+    # Rating / angle filter callbacks
+    # =======================================================================
+
+    def _changeRating(self, item):
+        self.PRating = item.text()
+        self.currentRatingLab.setText(
+            translate("protoPypeForm", "Rating: ") + self.PRating)
+        self.fillSizes()
+        self.sizeList.setCurrentRow(0)
+
+    def _onAngChanged(self):
+        self._angFilter = 45 if self._radioLat.isChecked() else 0
+        # Show spin control only for 45-deg lateral, then resize the dialog
+        if self._angFilter == 45:
+            self._spinWidget.show()
+        else:
+            self._spinWidget.hide()
+            self._alpha = 0.0
+        self.adjustSize()
+        self.fillSizes()
+        self.sizeList.setCurrentRow(0)
+
+    # =======================================================================
+    # Host-object detection
+    # =======================================================================
+
+    def _detectHostObject(self):
+        self._srcObj = None
+        try:
+            selex = FreeCADGui.Selection.getSelectionEx()
+            if selex and hasattr(selex[0].Object, "PType"):
+                self._srcObj = selex[0].Object
+        except Exception:
+            pass
+
+        if self._srcObj is None:
+            self._posGroup.hide()
+            self._posHint.setText("")
+            return
+
+        ptype = self._srcObj.PType
+
+        if ptype == "Pipe":
+            H = float(self._srcObj.Height)
+            self._t_max = H
+            self._t = H / 2.0
+            self._phi = 0.0
+            self._posGroup.show()
+            self._posHint.setText(translate("insertOutletForm",
+                "0 deg = pipe local +X"))
+            self._syncSlider(self._t)
+            self._syncDial(self._phi)
+
+        elif ptype == "Tee":
+            C = float(self._srcObj.C)
+            self._t_max = 2.0 * C
+            self._t = C
+            self._phi = 270.0
+            self._posGroup.show()
+            self._posHint.setText(translate("insertOutletForm",
+                "Branch ~90 deg  |  0 deg = local +X"))
+            self._syncSlider(self._t)
+            self._syncDial(self._phi)
+
+        elif ptype == "Elbow":
+            self._posGroup.hide()
+            self._posHint.setText(translate("insertOutletForm",
+                "Elbow: placed at bend midpoint (outer face)"))
+            if self._angFilter == 45:
+                self._spinWidget.show()
+            else:
+                self._spinWidget.hide()
+
+        else:
+            self._posGroup.hide()
+            self._posHint.setText("")
+
+    # =======================================================================
+    # Sync helpers
+    # =======================================================================
+
+    def _syncSlider(self, t_mm):
+        self._updating_ui = True
+        frac = t_mm / self._t_max if self._t_max > 0 else 0.0
+        self._axSlider.setValue(int(round(frac * 1000)))
+        self._axSpin.setMaximum(self._t_max)
+        self._axSpin.setValue(t_mm)
+        self._updating_ui = False
+
+    def _syncDial(self, phi_deg):
+        self._updating_ui = True
+        self._dial.setValue(int(round(phi_deg)) % 360)
+        self._rotSpin.setValue(phi_deg % 360.0)
+        self._updating_ui = False
+
+    def _syncSpinDial(self, alpha_deg):
+        self._updating_ui = True
+        a = max(-180.0, min(180.0, alpha_deg))
+        self._spinDial.setValue(int(round(a)))
+        self._spinSpin.setValue(a)
+        self._updating_ui = False
+
+    # =======================================================================
+    # Signal handlers - axial slider / circumferential dial / spin dial
+    # =======================================================================
+
+    def _onSliderChanged(self, val):
+        if self._updating_ui:
+            return
+        self._t = (val / 1000.0) * self._t_max
+        self._updating_ui = True
+        self._axSpin.setValue(self._t)
+        self._updating_ui = False
+        self._liveUpdate()
+
+    def _onAxSpinChanged(self, val):
+        if self._updating_ui:
+            return
+        self._t = val
+        frac = val / self._t_max if self._t_max > 0 else 0.0
+        self._updating_ui = True
+        self._axSlider.setValue(int(round(frac * 1000)))
+        self._updating_ui = False
+        self._liveUpdate()
+
+    def _onDialChanged(self, val):
+        if self._updating_ui:
+            return
+        self._phi = float(val)
+        self._updating_ui = True
+        self._rotSpin.setValue(self._phi)
+        self._updating_ui = False
+        self._liveUpdate()
+
+    def _onRotSpinChanged(self, val):
+        if self._updating_ui:
+            return
+        self._phi = val % 360.0
+        self._updating_ui = True
+        self._dial.setValue(int(round(self._phi)) % 360)
+        self._updating_ui = False
+        self._liveUpdate()
+
+    def _onSpinDialChanged(self, val):
+        if self._updating_ui:
+            return
+        self._alpha = float(val)
+        self._updating_ui = True
+        self._spinSpin.setValue(self._alpha)
+        self._updating_ui = False
+        self._liveUpdate()
+
+    def _onSpinSpinChanged(self, val):
+        if self._updating_ui:
+            return
+        self._alpha = val
+        self._updating_ui = True
+        self._spinDial.setValue(int(round(val)))
+        self._updating_ui = False
+        self._liveUpdate()
+
+    def _liveUpdate(self):
+        """Reposition the last-inserted outlet in real time."""
+        if self.lastOutlet is None or self._srcObj is None:
+            return
+        try:
+            ptype = self._srcObj.PType
+            if ptype == "Pipe":
+                pos, rot = pCmd.outletPlacementOnPipe(
+                    self._srcObj, self._t, self._phi, self._alpha)
+            elif ptype == "Tee":
+                pos, rot = pCmd.outletPlacementOnTee(
+                    self._srcObj, self._t, self._phi, self._alpha)
+            elif ptype == "Elbow":
+                pos, rot = pCmd.outletPlacementOnElbow(
+                    self._srcObj, self._alpha)
+            else:
+                return
+            self.lastOutlet.Placement = FreeCAD.Placement(pos, rot)
+            FreeCAD.activeDocument().recompute()
+        except Exception as exc:
+            FreeCAD.Console.PrintWarning(
+                "insertOutletForm._liveUpdate: " + str(exc) + "\n")
+
+    # =======================================================================
+    # Action buttons
+    # =======================================================================
+
+    def _buildPropList(self):
+        row = self.sizeList.currentRow()
+        if row < 0 or row >= len(self.pipeDictList):
+            return None
+        d = self.pipeDictList[row]
+        E = float(pq(d["E"])) if "E" in d and d["E"].strip() else 0.0
+        return [
+            self.PRating,
+            d["PSize"],
+            float(pq(d["OD"])),
+            float(pq(d["thk"])),
+            float(pq(d["A"])),
+            float(pq(d["B"])),
+            d.get("Conn", "BW"),       # passed straight to pFeatures as EndType
+            int(d.get("Ang", "0")),
+            E,
+        ]
+
+    def insert(self):
+        self._detectHostObject()
+        propList = self._buildPropList()
+        if propList is None:
+            FreeCAD.Console.PrintWarning("insertOutletForm: no size selected\n")
+            return
+
+        pl = (self.combo.currentText()
+              if self.combo.currentText() != "<none>" else None)
+        t_use     = self._t     if self._srcObj is not None else None
+        phi_use   = self._phi   if self._srcObj is not None else None
+        alpha_use = self._alpha if self._srcObj is not None else 0.0
+
+        result = pCmd.doOutlets(propList, pl,
+                                srcObj=self._srcObj,
+                                t=t_use, phi_deg=phi_use,
+                                alpha_deg=alpha_use)
+        if result:
+            self.lastOutlet = result[-1]
+
+        FreeCAD.activeDocument().recompute()
+        FreeCADGui.Selection.clearSelection()
+        if self.lastOutlet:
+            FreeCADGui.Selection.addSelection(self.lastOutlet)
+
+    def reverse(self):
+        """Flip 180 deg in circumferential position (phi), keeping axial pos."""
+        if self.lastOutlet is None or self._srcObj is None:
+            objs = [o for o in FreeCADGui.Selection.getSelection()
+                    if hasattr(o, "PType") and o.PType == "Outlet"]
+            tgt = objs[0] if objs else self.lastOutlet
+            if tgt:
+                pCmd.rotateTheTubeAx(tgt, FreeCAD.Vector(1, 0, 0), 180)
+            return
+        self._phi = (self._phi + 180.0) % 360.0
+        self._syncDial(self._phi)
+        self._liveUpdate()
+
+    def apply(self):
+        """Push current size/rating onto all selected Outlet objects."""
+        propList = self._buildPropList()
+        if propList is None:
+            return
+        for obj in FreeCADGui.Selection.getSelection():
+            if not (hasattr(obj, "PType") and obj.PType == "Outlet"):
+                continue
+            obj.PRating = propList[0]
+            obj.PSize   = propList[1]
+            obj.OD      = propList[2]
+            obj.thk     = propList[3]
+            obj.A       = propList[4]
+            obj.B       = propList[5]
+            obj.EndType = propList[6]
+            obj.Angle   = propList[7]
+            obj.E       = propList[8]
+        FreeCAD.activeDocument().recompute()

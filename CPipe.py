@@ -644,7 +644,44 @@ class makeHeader:
             ),
         }
 
+class insertBeam:
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None
 
+    def Activated(self):
+        import pForms
+        pForms.insertBeamForm()
+
+    def GetResources(self):
+        return {
+            "Pixmap": "Quetzal_InsertSection",
+            "MenuText": QT_TRANSLATE_NOOP("Quetzal_InsertBeam", "Insert beam section"),
+            "ToolTip":  QT_TRANSLATE_NOOP("Quetzal_InsertBeam",
+                "Insert a structural beam section. Select a port, edge, vertex, "
+                "or nothing to place at origin."),
+        }
+
+class insertOutlet:
+    """FreeCAD command: open the Insert Outlet dialog."""
+
+    def Activated(self):
+        import pForms
+        outletForm = pForms.insertOutletForm()
+
+    def IsActive(self):
+        return FreeCAD.activeDocument() is not None
+
+    def GetResources(self):
+        return {
+            "Pixmap":   "Quetzal_InsertOutlet",
+            "MenuText": QT_TRANSLATE_NOOP("Quetzal_InsertOutlet",
+                                          "Insert outlet"),
+            "ToolTip":  QT_TRANSLATE_NOOP("Quetzal_InsertOutlet",
+                        "Insert a branch-connection outlet fitting "
+                        "(Butt weld/socket weld|Straight/45 lateral)"),
+        }
+
+addCommand("Quetzal_InsertOutlet", insertOutlet())
 # ---------------------------------------------------------------------------
 # Adds the commands to the FreeCAD command manager
 # ---------------------------------------------------------------------------
@@ -674,7 +711,7 @@ addCommand("Quetzal_Point2Point", point2point())
 addCommand("Quetzal_InsertAnyShape", insertAnyz())
 addCommand("Quetzal_MakeHeader", makeHeader())
 addCommand("Quetzal_InsertTerminalAdapter", insertTerminalAdapter())
-
+addCommand("Quetzal_InsertBeam", insertBeam())
 
 ### QkMenus ###
 class pipeQM:

@@ -100,6 +100,7 @@ class QuetzalWorkbench(Workbench):
             "Quetzal_InsertValve",
             "Quetzal_InsertFlange",
             "Quetzal_InsertGasket",
+            "Quetzal_InsertOutlet",
             "Quetzal_InsertUBolt",
             "Quetzal_InsertPypeLine",
             "Quetzal_InsertBranch",
@@ -116,6 +117,7 @@ class QuetzalWorkbench(Workbench):
             "Quetzal_Attach2Tube",
             "Quetzal_Point2Point",
             "Quetzal_InsertAnyShape",
+            "Quetzal_InsertBeam",
         ]
         from dodoPM import toolList
 
