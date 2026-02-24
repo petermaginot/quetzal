@@ -615,15 +615,21 @@ class Flange(pypeType):
                     Part.makeCylinder(fp.B2 / 2, fp.Y, vZ * float(fp.T1 - fp.trf), vZ * -1)
                 )
                 flange = nn.removeSplitter()
+        elif fp.FlangeType == "BL":
+            # Blind flange: solid disc, no bore, no neck.
+            # Raised face is a solid cylinder (no bore cutout).
+            if fp.trf > 0 and fp.drf > 0 and fp.drf < fp.D:
+                rf = Part.makeCylinder(fp.drf / 2, fp.trf, vO, vZ * -1)
+                flange = flange.fuse(rf)
         fp.Shape = flange
         if fp.FlangeType == "WN":
             fp.Ports = [FreeCAD.Vector(0, 0, -float(fp.trf)), FreeCAD.Vector(0, 0, float(fp.T1)-float(fp.trf))] #weld neck flanges mate with pipe at T1 - RF thickness, raised face is at 0,0,-RF thickness
         elif fp.FlangeType == "SW":
             fp.Ports = [FreeCAD.Vector(0, 0, -float(fp.trf)), FreeCAD.Vector(0, 0, float(fp.T1)-float(fp.Y)-float(fp.trf))] #Socket weld flanges mate with pipe at Y - RF thickness, raised face is at 0,0,-RF thickness
-        elif fp.FlangeType == "SO":
-            fp.Ports = [FreeCAD.Vector(0, 0, -float(fp.trf)), FreeCAD.Vector(0, 0, float(fp.trf))] #slip on
-        else: #lap joint
-            fp.Ports = [FreeCAD.Vector(), FreeCAD.Vector(0, 0, float(fp.trf))] #lap joint flanges should be mated with pipe at 0,0,0. Raised face will be at 0,0,-RF thickness
+        elif fp.FlangeType == "BL": #blind flange
+            fp.Ports = [FreeCAD.Vector(0, 0, -float(fp.trf)), FreeCAD.Vector(0, 0, float(fp.t))] #Blind flange: port 0 at raised face, fictitious port 1 at outer back face
+        else: #slip on and lap joint
+            fp.Ports = [FreeCAD.Vector(), FreeCAD.Vector(0, 0, float(fp.trf))] #Slip on and lap joint flanges should be mated with pipe at 0,0,0. Raised face will be at 0,0,-RF thickness
         fp.PortDirections = [FreeCAD.Vector(0, 0, -1), FreeCAD.Vector(0, 0, 1)] #Flange face is toward -Z direction, flange weld end faces in +Z direction
         super(Flange, self).execute(fp)  # perform common operations
 

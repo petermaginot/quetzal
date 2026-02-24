@@ -812,7 +812,7 @@ class insertFlangeForm(dodoDialogs.protoPypeForm):
             d["PSize"],
             d["FlangeType"],
             float(pq(d["D"])),
-            float(pq(d["d"])),
+            float(pq(d.get("d", "0"))),      # blind flanges have no bore
             float(pq(d["df"])),
             float(pq(d["f"])),
             float(pq(d["t"])),
@@ -868,7 +868,7 @@ class insertFlangeForm(dodoDialogs.protoPypeForm):
                 obj.PSize = d["PSize"]
                 obj.FlangeType = d["FlangeType"]
                 obj.D = float(pq(d["D"]))
-                obj.d = float(pq(d["d"]))
+                obj.d = float(pq(d.get("d", "0")))      # blind flanges have no bore
                 obj.df = float(pq(d["df"]))
                 obj.f = float(pq(d["f"]))
                 obj.t = float(pq(d["t"]))
