@@ -891,6 +891,7 @@ class insertFlangeForm(dodoDialogs.protoPypeForm):
     def insert(self):
         self.offsetoption=self.btn4.isChecked()
         attachFace = self.faceEndRadio.isChecked()
+        """Do not override selected flange size
         tubes = [t for t in fCmd.beams() if hasattr(t, "PSize")]
         if len(tubes) > 0 and tubes[0].PSize in [prop["PSize"] for prop in self.pipeDictList]:
             for prop in self.pipeDictList:
@@ -898,7 +899,8 @@ class insertFlangeForm(dodoDialogs.protoPypeForm):
                     d = prop
                     break
         else:
-            d = self.pipeDictList[self.sizeList.currentRow()]
+        """
+        d = self.pipeDictList[self.sizeList.currentRow()]
         propList = [
             d["PSize"],
             d["FlangeType"],
@@ -968,6 +970,7 @@ class insertFlangeForm(dodoDialogs.protoPypeForm):
                 FreeCAD.activeDocument().recompute()
 
 
+
 class insertReductForm(dodoDialogs.protoPypeForm):
     """
     Dialog to insert concentric reductions.
@@ -1025,11 +1028,93 @@ class insertReductForm(dodoDialogs.protoPypeForm):
         self.secondCol.layout().addWidget(self.cb1)
         self.fillOD2()
 
+        # Rotation dial – shown only for eccentric reducers (in firstCol)
+        self.screenDial = QWidget()
+        self.screenDial.setLayout(QHBoxLayout())
+        self.dial = QDial()
+        self.dial.setWrapping(True)
+        self.dial.setMaximum(180)
+        self.dial.setMinimum(-180)
+        self.dial.setNotchTarget(15)
+        self.dial.setNotchesVisible(True)
+        self.dial.setMaximumSize(70, 70)
+        self.screenDial.layout().addWidget(self.dial)
+        self.dialLab = QLabel(translate("insertReductForm", "0 deg"))
+        self.dialLab.setAlignment(Qt.AlignCenter)
+        self.dial.valueChanged.connect(self.rotateEccentric)
+        self.screenDial.layout().addWidget(self.dialLab)
+        self.firstCol.layout().addWidget(self.screenDial)
+        self.screenDial.hide()   # only visible when Eccentric is checked
+        self.lastAngle = 0
+
+        self.cb1.toggled.connect(self._onEccentricToggled)
+
         #auto-select pipe size and rating if available
         pCmd.autoSelectInPipeForm(self)
 
         self.show()
         self.lastReduct = None
+
+    def _insertPort(self):
+        """Return the port index matching the active insert-end radio."""
+        return 1 if self.smallerEndRadio.isChecked() else 0
+
+    def _rotateAboutPort(self, obj, port_idx, angle_deg):
+        """
+        Rotate obj by angle_deg degrees about the axis passing through
+        Ports[port_idx] in world space.
+
+        rotateTheTubeAx always pivots about the placement Base (the world
+        position of Ports[0]).  For Port 0 that is correct.  For Port 1 of
+        an eccentric reducer the pivot point is offset, so we must:
+          1. Map the port location into world space.
+          2. Build the rotation about the object's insertion axis (world Z
+             as seen through the placement rotation).
+          3. Rotate both the Base and the Rotation of the Placement so the
+             chosen port stays pinned in world space.
+        """
+        # Axis direction: world-space Z of the object (same for both ports)
+        ax = obj.Placement.Rotation.multVec(FreeCAD.Vector(0, 0, 1)).normalize()
+        rot = FreeCAD.Rotation(ax, angle_deg)
+
+        if port_idx == 0:
+            # Port 0 is at the placement Base — standard rotation, no
+            # translation needed.
+            obj.Placement.Rotation = rot.multiply(obj.Placement.Rotation)
+        else:
+            # Port 1 is offset from the Base.  Pin it in world space.
+            pivot = obj.Placement.multVec(obj.Ports[port_idx])
+            old_base = obj.Placement.Base
+            new_base = pivot + rot.multVec(old_base - pivot)
+            obj.Placement.Base     = new_base
+            obj.Placement.Rotation = rot.multiply(obj.Placement.Rotation)
+
+    def _onEccentricToggled(self, checked):
+        """Show/hide the rotation dial when Eccentric checkbox changes."""
+        if checked:
+            self.screenDial.show()
+        else:
+            self.screenDial.hide()
+            # Reset dial and undo any accumulated rotation on the last reducer
+            if self.lastAngle != 0 and self.lastReduct:
+                self._rotateAboutPort(
+                    self.lastReduct, self._insertPort(), -self.lastAngle)
+                FreeCAD.activeDocument().recompute()
+            self.lastAngle = 0
+            self.dial.setValue(0)
+
+    def rotateEccentric(self):
+        """Rotate the last eccentric reducer around its insertion-port axis."""
+        if not self.lastReduct:
+            self.lastAngle = self.dial.value()
+            return
+        delta = self.dial.value() - self.lastAngle
+        self.lastAngle = self.dial.value()
+        self._rotateAboutPort(self.lastReduct, self._insertPort(), delta)
+        self.dialLab.setText(
+            str(self.dial.value()) + translate("insertReductForm", " deg"))
+        FreeCAD.activeDocument().recompute()
+
 
     def applyProp(self):
         r = self.pipeDictList[self.sizeList.currentRow()]
@@ -1165,6 +1250,9 @@ class insertReductForm(dodoDialogs.protoPypeForm):
         FreeCADGui.Selection.addSelection(self.lastReduct)
         if self.combo.currentText() != "<none>":
             pCmd.moveToPyLi(self.lastReduct, self.combo.currentText())
+        # Reset dial so the next insert starts from 0
+        self.lastAngle = 0
+        self.dial.setValue(0)
 
     def fillSizes(self):
         """Override to also refresh the OD2 list when DN/NPS is toggled."""
@@ -1178,7 +1266,6 @@ class insertReductForm(dodoDialogs.protoPypeForm):
             translate("protoPypeForm", "Rating: ") + self.PRating)
         self.fillSizes()
         self.sizeList.setCurrentRow(0)
-
 
 class insertUboltForm(dodoDialogs.protoPypeForm):
     """
@@ -2709,9 +2796,12 @@ class insertOutletForm(dodoDialogs.protoPypeForm):
         self.btn1.setFocus()
 
         # -- Initial fill --------------------------------------------------
+        for _i in range(self.ratingList.count()):
+            if self.ratingList.item(_i).text() == self.PRating:
+                self.ratingList.setCurrentRow(_i)
+                break
         self.fillSizes()
         self.sizeList.setCurrentRow(0)
-        self.ratingList.setCurrentRow(0)
         self._detectHostObject()
 
         self.show()
