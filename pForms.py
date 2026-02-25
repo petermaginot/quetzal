@@ -22,6 +22,11 @@ from PySide.QtWidgets import QCheckBox
 pq = FreeCAD.Units.parseQuantity
 translate = FreeCAD.Qt.translate
 
+try:
+    import quetzal_units as qu
+except Exception:
+    qu = None
+
 mw = FreeCADGui.getMainWindow()
 x = mw.x() + int(mw.width() / 20)  # 100
 y = max(300, int(mw.height() / 3))  # 350
@@ -115,9 +120,10 @@ class insertPipeForm(dodoDialogs.protoPypeForm):
         self.ratingList.setCurrentRow(0)
         self.btn1.clicked.connect(self.insert)
         self.edit1 = QLineEdit()
-        self.edit1.setPlaceholderText(translate("insertPipeForm", "<length>"))
+        _unit_hint = qu.get_length_unit() if qu else "mm"
+        self.edit1.setPlaceholderText(
+            translate("insertPipeForm", "<length> (") + _unit_hint + ")")
         self.edit1.setAlignment(Qt.AlignHCenter)
-        self.edit1.setValidator(QDoubleValidator())
         self.edit1.editingFinished.connect(lambda: self.sli.setValue(100))
         self.secondCol.layout().addWidget(self.edit1)
         self.btn2 = QPushButton(translate("insertPipeForm", "Reverse"))
@@ -159,7 +165,7 @@ class insertPipeForm(dodoDialogs.protoPypeForm):
         pipe_size_selected = self.pipeDictList[self.sizeList.currentRow()]
         rating = self.ratingList.currentItem().text()
         if self.edit1.text():
-            self.H = float(self.edit1.text())
+            self.H = float(pq(self.edit1.text()))
         self.sli.setValue(100)
         # DEFINE PROPERTIES
         """ Do not automatically choose rating, use only what is selected
@@ -205,7 +211,7 @@ class insertPipeForm(dodoDialogs.protoPypeForm):
     def apply(self):
         self.lastPipe = None
         if self.edit1.text():
-            self.H = float(self.edit1.text())
+            self.H = float(pq(self.edit1.text()))
         else:
             self.H = 200.0
         self.sli.setValue(100)
@@ -262,9 +268,10 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
         self.edit1.setValidator(QDoubleValidator())
         self.secondCol.layout().addWidget(self.edit1)
         self.edit2 = QLineEdit()
-        self.edit2.setPlaceholderText(translate("insertElbowForm", "<bend radius>"))
+        _unit_hint = qu.get_length_unit() if qu else "mm"
+        self.edit2.setPlaceholderText(
+            translate("insertElbowForm", "<bend radius> (") + _unit_hint + ")")
         self.edit2.setAlignment(Qt.AlignHCenter)
-        self.edit2.setValidator(QDoubleValidator())
         self.secondCol.layout().addWidget(self.edit2)
         self.btn2 = QPushButton(translate("insertElbowForm", "Trim/Extend"))
         self.btn2.clicked.connect(self.trim)
@@ -325,7 +332,7 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
                 float(d["BendRadius"]),
             ]
         if self.edit2.text():
-            propList[-1] = float(self.edit2.text())
+            propList[-1] = float(pq(self.edit2.text()))
         # INSERT ELBOW
         self.lastElbow = pCmd.doElbow(propList, FreeCAD.__activePypeLine__)[-1]
         # TODO: SET PRATING
@@ -363,7 +370,7 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
                 else:
                     obj.BendAngle = pq(d["BendAngle"])
                 if self.edit2.text():
-                    obj.BendRadius = float(self.edit2.text())
+                    obj.BendRadius = float(pq(self.edit2.text()))
                 else:
                     obj.BendRadius = pq(d["BendRadius"])
                 obj.PRating = self.PRating
@@ -396,20 +403,14 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
         dist = initial_port_pos - final_port_pos
         self.lastElbow.Placement.move(dist)
 
-
 class insertTeeForm(dodoDialogs.protoPypeForm):
     """
     Dialog to insert one tee.
-    For position and orientation you can select
-      - one vertex,
-      - one circular edge
-      - a pair of edges or pipes or beams
-      - one pipe at one of its ends
-      - nothing.
-    In case one pipe is selected, its properties are applied to the elbow and
-    the tube or tubes are trimmed or extended automatically.
-    Also available one button to trim/extend one selected pipe to the selected
-    edges, if necessary.
+    Primary list  = run sizes  (PSize / OD / thk).
+    Secondary list = branch sizes available for the selected run
+                     (derived from OD2/thk2 columns of matching rows).
+    This mirrors the reducer form layout so that DN/NPS toggling works
+    independently on both lists.
     """
 
     def __init__(self):
@@ -423,24 +424,27 @@ class insertTeeForm(dodoDialogs.protoPypeForm):
         )
         self.sizeList.setCurrentRow(0)
         self.ratingList.setCurrentRow(0)
+        self.ratingList.itemClicked.disconnect(self.changeRating)
         self.ratingList.itemClicked.connect(self.changeRating2)
-        self.btn1.clicked.connect(self.insert)
-       
-        
+
+        # Branch size list (secondary, in secondCol above the buttons)
+        self._branchDictList = []   # list of full CSV row dicts for current run
+        self._branchList = QListWidget()
+        self._branchList.setMaximumHeight(100)
+        branchLabel = QLabel(translate("insertTeeForm", "Branch size:"))
+        self.secondCol.layout().addWidget(branchLabel)
+        self.secondCol.layout().addWidget(self._branchList)
+
         self.insertModeGroup = QButtonGroup()
-
-        self.runRadio = QRadioButton("Insert on Run")
-        self.branchRadio = QRadioButton("Insert on Branch")
-
+        self.runRadio    = QRadioButton(translate("insertTeeForm", "Insert on Run"))
+        self.branchRadio = QRadioButton(translate("insertTeeForm", "Insert on Branch"))
         self.runRadio.setChecked(True)
-
         self.insertModeGroup.addButton(self.runRadio)
         self.insertModeGroup.addButton(self.branchRadio)
-
         self.secondCol.layout().addWidget(self.runRadio)
         self.secondCol.layout().addWidget(self.branchRadio)
-     
-        
+
+        self.btn1.clicked.connect(self.insert)
         self.btn3 = QPushButton(translate("insertTeeForm", "Reverse"))
         self.secondCol.layout().addWidget(self.btn3)
         self.btn3.clicked.connect(self.reverse)
@@ -449,10 +453,11 @@ class insertTeeForm(dodoDialogs.protoPypeForm):
         self.btn4.clicked.connect(self.apply)
         self.btn1.setDefault(True)
         self.btn1.setFocus()
+
+        # Branch rotation dial (in firstCol below the run size list)
         self.screenDial = QWidget()
         self.screenDial.setLayout(QHBoxLayout())
         self.dial = QDial()
-        self.dial.setMaximumSize(80, 80)
         self.dial.setWrapping(True)
         self.dial.setMaximum(180)
         self.dial.setMinimum(-180)
@@ -466,24 +471,110 @@ class insertTeeForm(dodoDialogs.protoPypeForm):
         self.screenDial.layout().addWidget(self.lab)
         self.firstCol.layout().addWidget(self.screenDial)
 
-        #auto-select pipe size and rating if available
+        # Wire up run selection -> repopulate branch list
+        self.sizeList.currentItemChanged.connect(self.fillBranch)
+
         pCmd.autoSelectInPipeForm(self)
 
         self.show()
-        self.lastTee = None
+        self.lastTee   = None
         self.lastAngle = 0
-    
+
+    # ── fillSizes override ───────────────────────────────────────────────────
+    # Show only unique run sizes in the primary list.
+    # pipeDictList keeps ALL rows (needed to build branch list).
+
+    def fillSizes(self):
+        self.sizeList.clear()
+        self.pipeDictList = []
+        fname = "Tee_" + self.PRating + ".csv"
+        fpath = join(dirname(abspath(__file__)), "tablez", fname)
+        try:
+            with open(fpath, "r") as fh:
+                import csv as _csv
+                self.pipeDictList = list(_csv.DictReader(fh, delimiter=";"))
+        except Exception:
+            return
+
+        # Deduplicate run sizes (PSize column) while preserving CSV order.
+        # Use the first row for each PSize to get OD/thk for the label.
+        seen_psize = []
+        for row in self.pipeDictList:
+            ps = row["PSize"]
+            if ps not in seen_psize:
+                seen_psize.append(ps)
+                if qu:
+                    label = qu.format_size_label(row)
+                else:
+                    label = ps + "  " + row.get("OD", "") + "x" + row.get("thk", "")
+                self.sizeList.addItem(label)
+
+        if hasattr(self, "_branchList"):
+            self.fillBranch()
+
+    # ── fillBranch ───────────────────────────────────────────────────────────
+
+    def fillBranch(self):
+        """Populate _branchList from rows matching the currently selected run."""
+        self._branchList.clear()
+        self._branchDictList = []
+        if not self.pipeDictList:
+            return
+
+        # Map sizeList row index -> PSize (deduplicated, order-preserved)
+        seen = []
+        for row in self.pipeDictList:
+            if row["PSize"] not in seen:
+                seen.append(row["PSize"])
+        row_idx = self.sizeList.currentRow()
+        if row_idx < 0:
+            row_idx = 0
+        if row_idx >= len(seen):
+            return
+        run_psize = seen[row_idx]
+
+        for row in self.pipeDictList:
+            if row["PSize"] != run_psize:
+                continue
+            self._branchDictList.append(row)
+            branch_psize = row.get("PSizeBranch", "")
+            if qu:
+                # Build a synthetic row for the branch so format_size_label
+                # shows "NPS 2  2.375 in x 0.154 in" using OD2/thk2 values
+                branch_row = {
+                    "PSize": branch_psize,
+                    "OD":    row["OD2"],
+                    "thk":   row["thk2"],
+                }
+                label = qu.format_size_label(branch_row)
+            else:
+                label = branch_psize + "  " + row["OD2"] + "x" + row["thk2"]
+            self._branchList.addItem(label)
+
+        self._branchList.setCurrentRow(0)
+
+    # ── changeRating2 ────────────────────────────────────────────────────────
+
+    def changeRating2(self, item):
+        self.PRating = item.text()
+        self.currentRatingLab.setText(
+            translate("protoPypeForm", "Rating: ") + self.PRating)
+        self.fillSizes()
+        self.sizeList.setCurrentRow(0)
+
+    # ── insert ───────────────────────────────────────────────────────────────
+
     def insert(self):
         self.lastAngle = 0
         self.dial.setValue(0)
         insertOnBranch = self.branchRadio.isChecked()
-        DN = OD = OD2 = thk = thk2 = PRating = C = M = None
-        propList = []
-        d = self.pipeDictList[self.sizeList.currentRow()]
-        
-        #selex = FreeCADGui.Selection.getSelectionEx()
-        # DEFINE PROPERTIES
-        
+
+        branch_idx = self._branchList.currentRow()
+        if branch_idx < 0 or branch_idx >= len(self._branchDictList):
+            FreeCAD.Console.PrintWarning("insertTeeForm: no branch size selected\n")
+            return
+        d = self._branchDictList[branch_idx]
+
         propList = [
             d["PSize"],
             float(pq(d["OD"])),
@@ -493,81 +584,78 @@ class insertTeeForm(dodoDialogs.protoPypeForm):
             float(pq(d["C"])),
             float(pq(d["M"])),
         ]
-        
-        # INSERT Tee
-        self.lastTee = pCmd.doTees(propList,FreeCAD.__activePypeLine__,insertOnBranch)[-1]
-        
+        self.lastTee = pCmd.doTees(
+            propList, FreeCAD.__activePypeLine__, insertOnBranch)[-1]
         FreeCAD.activeDocument().recompute()
         FreeCADGui.Selection.clearSelection()
         FreeCADGui.Selection.addSelection(self.lastTee)
+
+    # ── trim ─────────────────────────────────────────────────────────────────
 
     def trim(self):
         if len(fCmd.beams()) == 1:
             pipe = fCmd.beams()[0]
             comPipeEdges = [e.CenterOfMass for e in pipe.Shape.Edges]
             eds = [e for e in fCmd.edges() if e.CenterOfMass not in comPipeEdges]
-            FreeCAD.activeDocument().openTransaction(translate("Transaction", "Trim pipes"))
+            FreeCAD.activeDocument().openTransaction(
+                translate("Transaction", "Trim pipes"))
             for edge in eds:
                 fCmd.extendTheBeam(fCmd.beams()[0], edge)
             FreeCAD.activeDocument().commitTransaction()
             FreeCAD.activeDocument().recompute()
         else:
-            FreeCAD.Console.PrintError(translate("insertTeeForm", "Wrong selection\n"))
-    
+            FreeCAD.Console.PrintError(
+                translate("insertTeeForm", "Wrong selection\n"))
+
+    # ── rotatePort ───────────────────────────────────────────────────────────
+
     def rotatePort(self):
         insertOnBranch = self.branchRadio.isChecked()
-        #if self.lastTee:
         if insertOnBranch:
             pCmd.rotateTheTeePort(self.lastTee, 2, self.lastAngle * -1)
             self.lastAngle = self.dial.value()
             pCmd.rotateTheTeePort(self.lastTee, 2, self.lastAngle)
-            
         else:
             pCmd.rotateTheTeePort(self.lastTee, 0, self.lastAngle * -1)
             self.lastAngle = self.dial.value()
             pCmd.rotateTheTeePort(self.lastTee, 0, self.lastAngle)
-            
-        self.lab.setText(str(self.dial.value()) + translate("insertTeeForm", " deg"))
+        self.lab.setText(
+            str(self.dial.value()) + translate("insertTeeForm", " deg"))
+
+    # ── apply ────────────────────────────────────────────────────────────────
 
     def apply(self):
+        branch_idx = self._branchList.currentRow()
+        if branch_idx < 0 or branch_idx >= len(self._branchDictList):
+            return
+        d = self._branchDictList[branch_idx]
         for obj in FreeCADGui.Selection.getSelection():
-            d = self.pipeDictList[self.sizeList.currentRow()]
             if hasattr(obj, "PType") and obj.PType == self.PType:
-                obj.PSize = d["PSize"]
-                obj.OD = pq(d["OD"])
-                obj.thk = pq(d["thk"])
-                
+                obj.PSize  = d["PSize"]
+                obj.OD     = pq(d["OD"])
+                obj.OD2    = pq(d["OD2"])
+                obj.thk    = pq(d["thk"])
+                obj.thk2   = pq(d["thk2"])
                 obj.PRating = self.PRating
                 FreeCAD.activeDocument().recompute()
-    
-                
-    def changeRating2(self, item):
-        self.PRating = item.text()
-        self.fillSizes()
-        self.sizeList.setCurrentRow(0)
+
+    # ── reverse ──────────────────────────────────────────────────────────────
 
     def reverse(self):
-        
-        if self.branchRadio.isChecked():
-            port = 2
-        else:
-            port = 0
-
-        initial_port_pos = self.lastTee.Placement.multVec(self.lastTee.Ports[port])
-        crossVector1 = FreeCAD.Vector(1,0,0)
+        port = 2 if self.branchRadio.isChecked() else 0
+        initial_port_pos = self.lastTee.Placement.multVec(
+            self.lastTee.Ports[port])
+        crossVector1 = FreeCAD.Vector(1, 0, 0)
         crossVector2 = self.lastTee.Ports[port].normalize()
-        #if the port is at Vector(0,0,0) or Vector(1,0,0), it will cause problems, so catch those and assign different rotation axes.
         if crossVector2 == crossVector1:
-            crossVector1 = FreeCAD.Vector(0,1,0)
-        if crossVector2 == FreeCAD.Vector(0,0,0):
-            crossVector2 = FreeCAD.Vector(0,1,0)
-        pCmd.rotateTheTubeAx(self.lastTee,crossVector1.cross(crossVector2), angle=180)
-        final_port_pos = self.lastTee.Placement.multVec(self.lastTee.Ports[port])
-        
-        #recalculate the distance between the two and move object again
-        dist = initial_port_pos - final_port_pos
-        self.lastTee.Placement.move(dist)
-   
+            crossVector1 = FreeCAD.Vector(0, 1, 0)
+        if crossVector2 == FreeCAD.Vector(0, 0, 0):
+            crossVector2 = FreeCAD.Vector(0, 1, 0)
+        pCmd.rotateTheTubeAx(
+            self.lastTee, crossVector1.cross(crossVector2), angle=180)
+        final_port_pos = self.lastTee.Placement.multVec(
+            self.lastTee.Ports[port])
+        self.lastTee.Placement.move(initial_port_pos - final_port_pos)
 
 
 class insertTerminalAdapterForm(dodoDialogs.protoPypeForm):
@@ -615,10 +703,11 @@ class insertTerminalAdapterForm(dodoDialogs.protoPypeForm):
         r = self.pipeDictList[self.sizeList.currentRow()]
         DN = r["PSize"]
         OD1 = float(pq(r["OD"]))
-        OD2 = float(pq(self.OD2list.currentItem().text()))
+        idx2 = self.OD2list.currentRow()
+        OD2 = float(pq(self._od2_raw[idx2])) if hasattr(self, "_od2_raw") and idx2 < len(self._od2_raw) else float(pq(self.OD2list.currentItem().text()))
         thk1 = float(pq(r["thk"]))
         try:
-            thk2 = float(pq(r["thk2"].split(">")[self.OD2list.currentRow()]))
+            thk2 = float(pq(self._thk2_raw[idx2])) if hasattr(self, "_thk2_raw") and idx2 < len(self._thk2_raw) else float(pq(r["thk2"].split(">")[idx2]))
         except:
             thk2 = thk1
         H = pq(r["H"])
@@ -716,6 +805,8 @@ class insertTerminalAdapterForm(dodoDialogs.protoPypeForm):
 
     def changeRating2(self, item):
         self.PRating = item.text()
+        self.currentRatingLab.setText(
+            translate("protoPypeForm", "Rating: ") + self.PRating)
         self.fillSizes()
         self.sizeList.setCurrentRow(0)
 
@@ -860,7 +951,7 @@ class insertFlangeForm(dodoDialogs.protoPypeForm):
         FreeCAD.activeDocument().recompute()
         FreeCADGui.Selection.clearSelection()
         FreeCADGui.Selection.addSelection(self.lastFlange)
-
+        
     def apply(self):
         for obj in FreeCADGui.Selection.getSelection():
             d = self.pipeDictList[self.sizeList.currentRow()]
@@ -977,7 +1068,27 @@ class insertReductForm(dodoDialogs.protoPypeForm):
 
     def fillOD2(self):
         self.OD2list.clear()
-        self.OD2list.addItems(self.pipeDictList[self.sizeList.currentRow()]["OD2"].split(">"))
+        # Keep parallel raw-value lists so insert/applyProp read by index
+        self._od2_raw  = []
+        self._thk2_raw = []
+        if not self.pipeDictList:
+            return
+        row_idx = self.sizeList.currentRow()
+        if row_idx < 0:
+            row_idx = 0
+        r = self.pipeDictList[row_idx]
+        od2_vals  = r["OD2"].split(">")
+        thk2_vals = r.get("thk2", "").split(">")
+        for i, od2 in enumerate(od2_vals):
+            thk2 = thk2_vals[i] if i < len(thk2_vals) else ""
+            self._od2_raw.append(od2.strip())
+            self._thk2_raw.append(thk2.strip())
+            if qu:
+                label = qu.format_secondary_label(
+                    od2.strip(), thk2.strip(), self.pipeDictList)
+            else:
+                label = od2.strip() + ("x" + thk2.strip() if thk2.strip() else "")
+            self.OD2list.addItem(label)
         self.OD2list.setCurrentRow(0)
 
     def reverse(self):
@@ -1015,8 +1126,8 @@ class insertReductForm(dodoDialogs.protoPypeForm):
         #recalculate the distance between the two and move object again
         dist = initial_port_pos - final_port_pos
         self.lastReduct.Placement.move(dist)
-   
         
+
     def insert(self):
         r = self.pipeDictList[self.sizeList.currentRow()]
         pos = Z = H = None
@@ -1024,10 +1135,11 @@ class insertReductForm(dodoDialogs.protoPypeForm):
         pipes = [p.Object for p in selex if hasattr(p.Object, "PType") and p.Object.PType == "Pipe"]
         DN = r["PSize"]
         OD1 = float(pq(r["OD"]))
-        OD2 = float(pq(self.OD2list.currentItem().text()))
+        idx2 = self.OD2list.currentRow()
+        OD2 = float(pq(self._od2_raw[idx2])) if hasattr(self, "_od2_raw") and idx2 < len(self._od2_raw) else float(pq(self.OD2list.currentItem().text()))
         thk1 = float(pq(r["thk"]))
         try:
-            thk2 = float(pq(r["thk2"].split(">")[self.OD2list.currentRow()]))
+            thk2 = float(pq(self._thk2_raw[idx2])) if hasattr(self, "_thk2_raw") and idx2 < len(self._thk2_raw) else float(pq(r["thk2"].split(">")[idx2]))
         except:
             thk2 = thk1
         H = pq(r["H"])
@@ -1054,8 +1166,16 @@ class insertReductForm(dodoDialogs.protoPypeForm):
         if self.combo.currentText() != "<none>":
             pCmd.moveToPyLi(self.lastReduct, self.combo.currentText())
 
+    def fillSizes(self):
+        """Override to also refresh the OD2 list when DN/NPS is toggled."""
+        super(insertReductForm, self).fillSizes()
+        if hasattr(self, "OD2list"):
+            self.fillOD2()
+
     def changeRating2(self, item):
         self.PRating = item.text()
+        self.currentRatingLab.setText(
+            translate("protoPypeForm", "Rating: ") + self.PRating)
         self.fillSizes()
         self.sizeList.setCurrentRow(0)
 
@@ -2323,9 +2443,10 @@ class insertBeamForm(dodoDialogs.protoPypeForm):
 
         # Length field and slider (mirrors insertPipeForm)
         self.edit1 = QLineEdit()
-        self.edit1.setPlaceholderText(translate("insertBeamForm", "<length mm>"))
+        _unit_hint = qu.get_length_unit() if qu else "mm"
+        self.edit1.setPlaceholderText(
+            translate("insertBeamForm", "<length> (") + _unit_hint + ")")
         self.edit1.setAlignment(Qt.AlignHCenter)
-        self.edit1.setValidator(QDoubleValidator())
         self.edit1.editingFinished.connect(lambda: self.sli.setValue(100))
         self.secondCol.layout().addWidget(self.edit1)
 
@@ -2356,8 +2477,8 @@ class insertBeamForm(dodoDialogs.protoPypeForm):
         """Scale the displayed length proportionally with the slider."""
         if self.edit1.text():
             try:
-                base = float(self.edit1.text())
-            except ValueError:
+                base = float(pq(self.edit1.text()))
+            except Exception:
                 base = self.H
         else:
             base = self.H
@@ -2382,8 +2503,8 @@ class insertBeamForm(dodoDialogs.protoPypeForm):
         d = self.pipeDictList[self.sizeList.currentRow()]
         if self.edit1.text():
             try:
-                self.H = float(self.edit1.text())
-            except ValueError:
+                self.H = float(pq(self.edit1.text()))
+            except Exception:
                 pass
         self.sli.setValue(100)
 
@@ -2481,19 +2602,20 @@ class insertOutletForm(dodoDialogs.protoPypeForm):
         pgLayout.setSpacing(3)
 
         # Axial slider row
+        _ax_unit = qu.get_length_unit() if qu else "mm"
         pgLayout.addWidget(QLabel(
-            translate("insertOutletForm", "Distance from Port 0 (mm):")))
+            translate("insertOutletForm", "Distance from Port 0 (") + _ax_unit + "):"))
         axRow = QHBoxLayout()
         self._axSlider = QSlider(Qt.Horizontal)
         self._axSlider.setMinimum(0)
         self._axSlider.setMaximum(1000)
         self._axSlider.setValue(500)
         self._axSpin = QDoubleSpinBox()
-        self._axSpin.setDecimals(1)
+        self._axSpin.setDecimals(3)
         self._axSpin.setMinimum(0.0)
-        self._axSpin.setMaximum(10000.0)
-        self._axSpin.setSuffix(" mm")
-        self._axSpin.setFixedWidth(88)
+        self._axSpin.setMaximum(999999.0)
+        self._axSpin.setSuffix(" " + _ax_unit)
+        self._axSpin.setFixedWidth(100)
         axRow.addWidget(self._axSlider)
         axRow.addWidget(self._axSpin)
         pgLayout.addLayout(axRow)
@@ -2613,8 +2735,14 @@ class insertOutletForm(dodoDialogs.protoPypeForm):
         for row in all_rows:
             if row.get("Ang", "0") == ang_str:
                 self.pipeDictList.append(row)
-                label = (row["PSize"] + "  " + row["OD"] + "x" + row["thk"]
-                         + "  " + row.get("Conn", ""))
+                if qu:
+                    psize = qu.format_psize(row["PSize"])
+                    od    = qu.format_dim(row["OD"])
+                    thk   = qu.format_dim(row["thk"])
+                    label = psize + "  " + od + " x " + thk + "  " + row.get("Conn", "")
+                else:
+                    label = (row["PSize"] + "  " + row["OD"] + "x" + row["thk"]
+                             + "  " + row.get("Conn", ""))
                 self.sizeList.addItem(label)
 
     # =======================================================================
@@ -2703,8 +2831,14 @@ class insertOutletForm(dodoDialogs.protoPypeForm):
         self._updating_ui = True
         frac = t_mm / self._t_max if self._t_max > 0 else 0.0
         self._axSlider.setValue(int(round(frac * 1000)))
-        self._axSpin.setMaximum(self._t_max)
-        self._axSpin.setValue(t_mm)
+        if qu:
+            _u = qu.get_length_unit()
+            _cvt = lambda v: float(FreeCAD.Units.parseQuantity(str(v) + " mm").getValueAs(_u))
+            self._axSpin.setMaximum(_cvt(self._t_max))
+            self._axSpin.setValue(_cvt(t_mm))
+        else:
+            self._axSpin.setMaximum(self._t_max)
+            self._axSpin.setValue(t_mm)
         self._updating_ui = False
 
     def _syncDial(self, phi_deg):
@@ -2736,8 +2870,12 @@ class insertOutletForm(dodoDialogs.protoPypeForm):
     def _onAxSpinChanged(self, val):
         if self._updating_ui:
             return
-        self._t = val
-        frac = val / self._t_max if self._t_max > 0 else 0.0
+        if qu:
+            _u = qu.get_length_unit()
+            self._t = float(FreeCAD.Units.parseQuantity(str(val) + " " + _u).getValueAs("mm"))
+        else:
+            self._t = val
+        frac = self._t / self._t_max if self._t_max > 0 else 0.0
         self._updating_ui = True
         self._axSlider.setValue(int(round(frac * 1000)))
         self._updating_ui = False

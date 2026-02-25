@@ -90,6 +90,15 @@ class QuetzalWorkbench(Workbench):
 
         import CPipe  # noqa: F401
 
+        # Register Quetzal preference page (Edit > Preferences > Quetzal)
+        try:
+            import quetzal_units
+            FreeCADGui.addPreferencePage(
+                quetzal_units.QuetzalPreferencePage, "Quetzal")
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(
+                "Quetzal: could not register preference page: " + str(e) + "\n")
+
         self.pypeList = [
             "Quetzal_InsertPipe",
             "Quetzal_InsertElbow",
