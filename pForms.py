@@ -237,17 +237,21 @@ class insertPipeForm(dodoDialogs.protoPypeForm):
 
 class insertElbowForm(dodoDialogs.protoPypeForm):
     """
-    Dialog to insert one elbow.
-    For position and orientation you can select
-      - one vertex,
-      - one circular edge
-      - a pair of edges or pipes or beams
-      - one pipe at one of its ends
-      - nothing.
-    In case one pipe is selected, its properties are applied to the elbow and
-    the tube or tubes are trimmed or extended automatically.
-    Also available one button to trim/extend one selected pipe to the selected
-    edges, if necessary.
+    Dialog to insert one elbow (butt-weld) or socket/threaded elbow.
+
+    Butt-weld ratings (CSV has no "Conn" column, or Conn == "BW"):
+      - sizeList shows PSize + OD x thk
+      - edit1 = bend angle override, edit2 = bend radius override
+      - Insert calls pCmd.doElbow, Apply updates BW-specific properties
+
+    Socket-weld / threaded ratings (CSV has Conn == "SW" or "TH"):
+      - sizeList shows PSize + BendAngle (multiple rows per PSize for diff angles)
+      - edit1 = bend angle override only (no bend radius)
+      - edit2 is hidden
+      - Insert calls pCmd.doSocketElbow, Apply updates SW/TH-specific properties
+
+    The Trim/Extend button only acts on pipes (fCmd.beams() requires Height +
+    Profile, which SocketEll does not have, so socket elbows are never matched).
     """
 
     def __init__(self):
@@ -261,18 +265,30 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
         )
         self.sizeList.setCurrentRow(0)
         self.ratingList.setCurrentRow(0)
+
+        # Disconnect the base-class changeRating slot and reconnect to our own
+        # so we can refresh the form layout whenever the rating type changes.
+        try:
+            self.ratingList.itemClicked.disconnect(self.changeRating)
+        except Exception:
+            pass
+        self.ratingList.itemClicked.connect(self._changeRating)
+
         self.btn1.clicked.connect(self.insert)
+
         self.edit1 = QLineEdit()
         self.edit1.setPlaceholderText(translate("insertElbowForm", "<bend angle>"))
         self.edit1.setAlignment(Qt.AlignHCenter)
         self.edit1.setValidator(QDoubleValidator())
         self.secondCol.layout().addWidget(self.edit1)
+
         self.edit2 = QLineEdit()
         _unit_hint = qu.get_length_unit() if qu else "mm"
         self.edit2.setPlaceholderText(
             translate("insertElbowForm", "<bend radius> (") + _unit_hint + ")")
         self.edit2.setAlignment(Qt.AlignHCenter)
         self.secondCol.layout().addWidget(self.edit2)
+
         self.btn2 = QPushButton(translate("insertElbowForm", "Trim/Extend"))
         self.btn2.clicked.connect(self.trim)
         self.secondCol.layout().addWidget(self.btn2)
@@ -284,6 +300,7 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
         self.btn4.clicked.connect(self.apply)
         self.btn1.setDefault(True)
         self.btn1.setFocus()
+
         self.screenDial = QWidget()
         self.screenDial.setLayout(QHBoxLayout())
         self.dial = QDial()
@@ -300,30 +317,132 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
         self.dial.valueChanged.connect(self.rotatePort)
         self.screenDial.layout().addWidget(self.lab)
         self.firstCol.layout().addWidget(self.screenDial)
-        
-        #auto-select pipe size and rating if available
+
+        # auto-select pipe size and rating if available
         pCmd.autoSelectInPipeForm(self)
-        
+
+        # Refresh layout to match the initial rating type
+        self._refreshLayout()
+
         self.show()
         self.lastElbow = None
         self.lastAngle = 0
 
+    # ── helper: detect socket/threaded conn type from loaded CSV ────────────
+
+    def _isSocketConn(self):
+        """Return True when the current CSV is a SW or TH (socket/threaded) table.
+
+        Detection rule: if any row in pipeDictList has a non-empty "Conn" key
+        whose value is "SW" or "TH" the rating is a socket/threaded type.
+        A missing "Conn" column, or Conn == "BW", means butt-weld.
+        """
+        for row in self.pipeDictList:
+            conn = row.get("Conn", "").strip().upper()
+            if conn in ("SW", "TH"):
+                return True
+        return False
+
+    # ── fillSizes override ──────────────────────────────────────────────────
+
+    def fillSizes(self):
+        """Load the CSV for the current rating and populate sizeList.
+
+        Butt-weld CSVs (no Conn or Conn == "BW"):
+            label = PSize  OD x thk       (standard Elbow display)
+
+        Socket/threaded CSVs (Conn == "SW" or "TH"):
+            label = PSize  <BendAngle>°   (angle shown because multiple rows
+                                           per PSize are common, e.g. 90° / 45°)
+        """
+        self.sizeList.clear()
+        self.pipeDictList = []
+        fname = "Elbow_" + self.PRating + ".csv"
+        fpath = join(dirname(abspath(__file__)), "tablez", fname)
+        try:
+            with open(fpath, "r") as fh:
+                self.pipeDictList = list(csv.DictReader(fh, delimiter=";"))
+        except Exception:
+            return
+
+        if self._isSocketConn():
+            # Socket/threaded: show PSize + bend angle
+            for row in self.pipeDictList:
+                ang_str = row.get("BendAngle", "")
+                if qu:
+                    psize_lbl = qu.format_psize(row["PSize"])
+                    label = psize_lbl + "  " + ang_str + "°"
+                else:
+                    label = row["PSize"] + "  " + ang_str + "°"
+                self.sizeList.addItem(label)
+        else:
+            # Butt-weld: show PSize + OD x thk (standard format)
+            for row in self.pipeDictList:
+                if qu:
+                    label = qu.format_size_label(row)
+                else:
+                    label = row["PSize"] + "  " + row.get("OD", "") + "x" + row.get("thk", "")
+                self.sizeList.addItem(label)
+
+        # Refresh widget visibility to match the newly loaded type
+        self._refreshLayout()
+
+    # ── rating-change handler ───────────────────────────────────────────────
+
+    def _changeRating(self, item):
+        """Handle rating list click: update PRating, reload sizes, refresh layout."""
+        self.PRating = item.text()
+        self.currentRatingLab.setText(
+            translate("protoPypeForm", "Rating: ") + self.PRating)
+        self.fillSizes()
+        self.sizeList.setCurrentRow(0)
+
+    # ── layout refresh ──────────────────────────────────────────────────────
+
+    def _refreshLayout(self):
+        """Show/hide edit2 (bend radius) based on whether the current CSV is SW/TH."""
+        if self._isSocketConn():
+            self.edit2.hide()
+            self.edit2.setPlaceholderText("")
+        else:
+            _unit_hint = qu.get_length_unit() if qu else "mm"
+            self.edit2.setPlaceholderText(
+                translate("insertElbowForm", "<bend radius> (") + _unit_hint + ")")
+            self.edit2.show()
+
+    # ── insert ──────────────────────────────────────────────────────────────
+
     def insert(self):
         self.lastAngle = 0
         self.dial.setValue(0)
-        DN = OD = thk = PRating = None
-        propList = []
         d = self.pipeDictList[self.sizeList.currentRow()]
+
+        # Resolve bend angle: user override first, then CSV value
         try:
-            if float(self.edit1.text()) > 180:
-                self.edit1.setText("180")
             ang = float(self.edit1.text())
-        except:
+            if ang > 180:
+                ang = 180
+                self.edit1.setText("180")
+        except (ValueError, AttributeError):
             ang = float(pq(d["BendAngle"]))
-        selex = FreeCADGui.Selection.getSelectionEx()
-        # DEFINE PROPERTIES
-        
-        if not propList:
+
+        if self._isSocketConn():
+            # ── Socket / threaded elbow ──────────────────────────────────
+            propList = [
+                d["PSize"],
+                float(pq(d["OD"])),
+                ang,
+                float(pq(d["A"])),
+                float(pq(d["C"])),
+                float(pq(d["D"])),
+                float(pq(d["E"])),
+                float(pq(d["G"])),
+                d.get("Conn", "SW"),
+            ]
+            self.lastElbow = pCmd.doSocketElbow(
+                propList, FreeCAD.__activePypeLine__)[-1]
+        else:
+            # ── Butt-weld elbow ──────────────────────────────────────────
             propList = [
                 d["PSize"],
                 float(pq(d["OD"])),
@@ -331,40 +450,91 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
                 ang,
                 float(d["BendRadius"]),
             ]
-        if self.edit2.text():
-            propList[-1] = float(pq(self.edit2.text()))
-        # INSERT ELBOW
-        self.lastElbow = pCmd.doElbow(propList, FreeCAD.__activePypeLine__)[-1]
-        # TODO: SET PRATING
+            if self.edit2.text():
+                propList[-1] = float(pq(self.edit2.text()))
+            self.lastElbow = pCmd.doElbow(
+                propList, FreeCAD.__activePypeLine__)[-1]
+
         FreeCAD.activeDocument().recompute()
 
+    # ── trim ────────────────────────────────────────────────────────────────
+
     def trim(self):
+        """Trim/extend the selected pipe to the selected elbow edges.
+
+        fCmd.beams() only matches objects with both 'Height' and 'Profile'
+        properties, so SocketEll objects are never included — this method is
+        safe for both butt-weld and socket-elbow workflows.
+        """
         if len(fCmd.beams()) == 1:
             pipe = fCmd.beams()[0]
             comPipeEdges = [e.CenterOfMass for e in pipe.Shape.Edges]
             eds = [e for e in fCmd.edges() if e.CenterOfMass not in comPipeEdges]
-            FreeCAD.activeDocument().openTransaction(translate("Transaction", "Trim pipes"))
+            FreeCAD.activeDocument().openTransaction(
+                translate("Transaction", "Trim pipes"))
             for edge in eds:
                 fCmd.extendTheBeam(fCmd.beams()[0], edge)
             FreeCAD.activeDocument().commitTransaction()
             FreeCAD.activeDocument().recompute()
         else:
-            FreeCAD.Console.PrintError(translate("insertElbowForm", "Wrong selection\n"))
+            FreeCAD.Console.PrintError(
+                translate("insertElbowForm", "Wrong selection\n"))
+
+    # ── rotatePort ──────────────────────────────────────────────────────────
 
     def rotatePort(self):
+        """Rotate the last-inserted elbow port via the dial.
+
+        Only meaningful for butt-weld elbows; for socket elbows the dial is
+        still wired but rotateTheElbowPort gracefully handles the call because
+        SocketEll has Ports defined.
+        """
         if self.lastElbow:
             pCmd.rotateTheElbowPort(self.lastElbow, 0, self.lastAngle * -1)
             self.lastAngle = self.dial.value()
             pCmd.rotateTheElbowPort(self.lastElbow, 0, self.lastAngle)
-            self.lab.setText(str(self.dial.value()) + translate("insertElbowForm", " deg"))
+            self.lab.setText(
+                str(self.dial.value()) + translate("insertElbowForm", " deg"))
+
+    # ── apply ───────────────────────────────────────────────────────────────
 
     def apply(self):
+        """Push current size/rating onto all selected elbow objects.
+
+        Detects whether each selected object is a butt-weld Elbow or a
+        socket/threaded SocketEll and applies the matching set of properties.
+        """
+        d = self.pipeDictList[self.sizeList.currentRow()]
+
+        # Resolve bend angle
+        try:
+            ang = float(self.edit1.text())
+        except (ValueError, AttributeError):
+            ang = float(pq(d["BendAngle"]))
+
         for obj in FreeCADGui.Selection.getSelection():
-            d = self.pipeDictList[self.sizeList.currentRow()]
-            if hasattr(obj, "PType") and obj.PType == self.PType:
+            if not hasattr(obj, "PType"):
+                continue
+
+            # ── Socket / threaded ell ────────────────────────────────────
+            if obj.PType == "SocketEll" and self._isSocketConn():
+                obj.PSize      = d["PSize"]
+                obj.OD         = pq(d["OD"])
+                obj.BendAngle  = ang
+                obj.A          = pq(d["A"])
+                obj.C          = pq(d["C"])
+                obj.D          = pq(d["D"])
+                obj.E          = pq(d["E"])
+                obj.G          = pq(d["G"])
+                obj.Conn       = d.get("Conn", "SW")
+                obj.PRating    = self.PRating
+                FreeCAD.activeDocument().recompute()
+
+            # ── Butt-weld elbow ──────────────────────────────────────────
+            elif obj.PType == "Elbow" and not self._isSocketConn():
                 obj.PSize = d["PSize"]
-                obj.OD = pq(d["OD"])
-                obj.thk = pq(d["thk"])
+                obj.OD    = pq(d["OD"])
+                obj.thk   = pq(d["thk"])
                 if self.edit1.text():
                     obj.BendAngle = float(self.edit1.text())
                 else:
@@ -376,30 +546,31 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
                 obj.PRating = self.PRating
                 FreeCAD.activeDocument().recompute()
 
-    def reverse(self):
-        """
-        if self.lastElbow:
-            pCmd.rotateTheTubeAx(self.lastElbow, angle=180)
-            self.lastElbow.Placement.move(
-                self.lastElbow.Placement.Rotation.multVec(self.lastElbow.Ports[0]) * -2
-            )
-        """
-        port = 0
+    # ── reverse ─────────────────────────────────────────────────────────────
 
-        initial_port_pos = self.lastElbow.Placement.multVec(self.lastElbow.Ports[port])
-        crossVector1 = FreeCAD.Vector(0,0,1)
-        crossVector2 = self.lastElbow.Ports[port]
-        #if the port is at Vector(0,0,0) or Vector(1,0,0), it will cause problems, so catch those and assign different rotation axes.
-        if crossVector2 == FreeCAD.Vector(0,0,0):
-            crossVector2 = FreeCAD.Vector(0,1,0)
+    def reverse(self):
+        """Flip the last inserted elbow 180° around its port[0] axis."""
+        if self.lastElbow is None:
+            return
+
+        port = 0
+        initial_port_pos = self.lastElbow.Placement.multVec(
+            self.lastElbow.Ports[port])
+
+        crossVector1 = FreeCAD.Vector(0, 0, 1)
+        crossVector2 = FreeCAD.Vector(self.lastElbow.Ports[port])
+        # Avoid degenerate cross products
+        if crossVector2 == FreeCAD.Vector(0, 0, 0):
+            crossVector2 = FreeCAD.Vector(0, 1, 0)
         crossVector2.normalize()
         if crossVector2 == crossVector1:
-            crossVector1 = FreeCAD.Vector(0,1,0)
-        
-        pCmd.rotateTheTubeAx(self.lastElbow,crossVector1.cross(crossVector2), angle=180)
-        final_port_pos = self.lastElbow.Placement.multVec(self.lastElbow.Ports[port])
-        
-        #recalculate the distance between the two and move object again
+            crossVector1 = FreeCAD.Vector(0, 1, 0)
+
+        pCmd.rotateTheTubeAx(
+            self.lastElbow, crossVector1.cross(crossVector2), angle=180)
+        final_port_pos = self.lastElbow.Placement.multVec(
+            self.lastElbow.Ports[port])
+
         dist = initial_port_pos - final_port_pos
         self.lastElbow.Placement.move(dist)
 

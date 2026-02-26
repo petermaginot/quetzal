@@ -635,12 +635,18 @@ def makeElbow(propList=[], pos=None, Z=None):
     else:
         pFeatures.Elbow(a)
     ViewProvider(a.ViewObject, "Quetzal_InsertElbow")
-    a.Placement.Base = pos
-    rot = FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), Z)
-    # rot=FreeCAD.Rotation(FreeCAD.Vector(0,-1,0),Z)
+
+    # Rotate so port[0]'s local direction faces Z.
+    # SocketEll port[0] direction is (1,0,0) — local +X, not +Z — so the
+    # reference axis must be port[0]'s actual local direction, not (0,0,1).
+    port0_local_dir = a.PortDirections[0] if a.PortDirections else FreeCAD.Vector(0, 0, 1)
+    rot = FreeCAD.Rotation(port0_local_dir, Z)
     a.Placement.Rotation = rot.multiply(a.Placement.Rotation)
+    # After rotation the object origin is still at (0,0,0). Translate so that
+    # port[0] — now in its rotated world position — lands exactly at pos.
+    port0_world = a.Placement.multVec(a.Ports[0])
+    a.Placement.Base = pos - port0_world
     a.Label = translate("Objects", "Elbow")
-    return a
 
 
 def makeElbowBetweenThings(thing1=None, thing2=None, propList=None):
@@ -720,49 +726,7 @@ def doElbow(propList=["DN50", 60.3, 3, 90, 45.225], pypeline=None):
     if len(selex) == 0:  # no selection -> insert one elbow at origin
         elist.append(makeElbow(propList))
     elif len(selex) == 1 and len(selex[0].SubObjects) == 1:  # one selection -> ...
-        """
-        if selex[0].SubObjects[0].ShapeType == "Vertex":  # ...on vertex
-            elist.append(makeElbow(propList, selex[0].SubObjects[0].Point))
-        elif (
-            selex[0].SubObjects[0].ShapeType == "Edge"
-            and selex[0].SubObjects[0].curvatureAt(0) != 0
-        ):  # ...on center of curved edge
-            P = selex[0].SubObjects[0].centerOfCurvatureAt(0)
-            N = (
-                selex[0]
-                .SubObjects[0]
-                .normalAt(0)
-                .cross(selex[0].SubObjects[0].tangentAt(0))
-                .normalize()
-            )
-            elb = makeElbow(propList, P)
-            if isPipe(selex[0].Object):  # ..on the edge of a pipe
-                ax = selex[0].Object.Shape.Solids[0].CenterOfMass - P
-                rot = FreeCAD.Rotation(elb.Ports[0], ax)
-                elb.Placement.Rotation = rot.multiply(elb.Placement.Rotation)
-                Port0 = getElbowPort(elb)
-                elb.Placement.move(P - Port0)
-            elif isElbow(selex[0].Object):  # ..on the edge of an elbow
-                p0, p1 = [
-                    selex[0].Object.Placement.Rotation.multVec(p) for p in selex[0].Object.Ports
-                ]
-                if fCmd.isParallel(p0, N):
-                    elb.Placement.Rotation = FreeCAD.Rotation(elb.Ports[0], p0 * -1)
-                else:
-                    elb.Placement.Rotation = FreeCAD.Rotation(elb.Ports[0], p1 * -1)
-                delta = getElbowPort(elb)
-                elb.Placement.move(P - delta)
-            else:  # ..on any other curved edge
-                #print("hello")
-                rot = FreeCAD.Rotation(elb.Ports[0], N)
-                elb.Placement.Rotation = rot.multiply(elb.Placement.Rotation)
-                # elb.Placement.move(elb.Placement.Rotation.multVec(elb.Ports[0])*-1)
-                v = portsDir(elb)[0].negative() * elb.Ports[0].Length
-                elb.Placement.move(v)
-            elist.append(elb)
-            FreeCAD.activeDocument().recompute()
-        """
-        
+               
         #first, if a an object with ports is selected and edges, faces, or vertices are selected, insert the component at the closest port to the 
         #first selected object's first selected edge, face, or vertex. If none of those are present, the entire object is selected - insert
         #the component at the highest number port.
@@ -2682,3 +2646,99 @@ def doOutlets(propList=None, pypeline=None,
     FreeCAD.activeDocument().commitTransaction()
     FreeCAD.activeDocument().recompute()
     return [obj]
+
+def makeSocketElbow(propList=[], pos=None, Z=None):
+    """Adds a SocketEll object.
+    makeSocketElbow(propList, pos, Z)
+      propList is one optional list with 8 elements:
+        PSize     (string): nominal diameter
+        OD        (float):  connecting pipe outside diameter
+        BendAngle (float):  bend angle in degrees
+        A         (float):  dimension from fitting center to outer edge
+        C         (float):  wall thickness in socket
+        D         (float):  bore internal diameter
+        E         (float):  dimension from fitting center to base of socket
+        G         (float):  inner body wall thickness
+        Conn      (string): connection type ("SW"=Socket Weld, "TH"=Threaded)
+      Default is "DN25"
+      pos (vector): position of insertion; default = 0,0,0
+      Z   (vector): orientation; default = 0,0,1
+    Remember: property PRating must be defined afterwards
+    """
+    if pos is None:
+        pos = FreeCAD.Vector(0, 0, 0)
+    if Z is None:
+        Z = FreeCAD.Vector(0, 0, 1)
+    a = FreeCAD.ActiveDocument.addObject("Part::FeaturePython", "SocketElbow")
+    if len(propList) == 9:
+        pFeatures.SocketEll(a, *propList)
+    else:
+        pFeatures.SocketEll(a)
+    ViewProvider(a.ViewObject, "Quetzal_InsertElbow")
+    # Rotate so port[0]'s local direction faces Z.
+    # SocketEll port[0] direction is (1,0,0) — local +X, not +Z — so the
+    # reference axis must be port[0]'s actual local direction, not (0,0,1).
+    port0_local_dir = a.PortDirections[0] if a.PortDirections else FreeCAD.Vector(0, 0, 1)
+    rot = FreeCAD.Rotation(port0_local_dir, Z)
+    a.Placement.Rotation = rot.multiply(a.Placement.Rotation)
+    # After rotation the object origin is still at (0,0,0). Translate so that
+    # port[0] — now in its rotated world position — lands exactly at pos.
+    port0_world = a.Placement.multVec(a.Ports[0])
+    a.Placement.Base = pos - port0_world
+    a.Label = translate("Objects", "SocketElbow")
+    return a
+
+
+def doSocketElbow(propList=["DN25", 33.4, 90, 35.0, 5.0, 25.4, 22.0, 5.455, "SW"], pypeline=None):
+    """
+    Insert a SocketEll fitting, aligning it to the selected port when possible.
+
+    propList = [
+      PSize     (string): nominal diameter
+      OD        (float):  connecting pipe outside diameter
+      BendAngle (float):  bend angle in degrees
+      A         (float):  dimension from fitting center to outer edge
+      C         (float):  wall thickness in socket
+      D         (float):  bore internal diameter
+      E         (float):  dimension from fitting center to base of socket
+      G         (float):  inner body wall thickness
+      Conn      (string): connection type ("SW" or "TH") ]
+    pypeline = string (optional PypeLine label)
+
+      - No selection         -> insert one SocketEll at the origin.
+      - One or more sub-object-> insert at the closest port of the first selected
+                                object and align port[0] of the new fitting
+                                to that port.
+          """
+    
+    elist = list()
+    try:
+        #first, if a an object with ports is selected and edges, faces, or vertices are selected, insert the component at the closest port to the 
+        #first selected object's first selected edge, face, or vertex. If none of those are present, the entire object is selected - insert
+        #the component at the highest number port.
+        selex = FreeCADGui.Selection.getSelectionEx()[0]
+        usablePorts = False
+        if hasattr(selex.Object, "Ports"):
+            if hasattr(selex.Object, "PType"):
+                if selex.Object.PType != "Any":
+                    usablePorts = True
+        
+        pos, Z, srcObj, srcPort = getAttachmentPoints()
+        if usablePorts:
+            socketEll = makeSocketElbow(propList, pos, Z)
+            elist.append(socketEll)
+            FreeCAD.activeDocument().commitTransaction()
+            FreeCAD.activeDocument().recompute()
+            alignTwoPorts(socketEll, 0, srcObj, srcPort)
+        else:
+            elist.append(makeSocketElbow(propList, pos, Z))
+    except:
+        #nothing selected, insert at origin
+        elist.append(makeSocketElbow(propList))
+        
+    if pypeline:
+        for e in elist:
+            moveToPyLi(e, pypeline)
+    FreeCAD.activeDocument().commitTransaction()
+    FreeCAD.activeDocument().recompute()
+    return elist

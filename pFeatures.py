@@ -689,6 +689,132 @@ class Flange(pypeType):
     #     fp.Placement=fp.Placement
     #     fp.Shape= obj.Shape
 
+class SocketEll(pypeType):
+    """  
+    SocketEll(obj, [PSize="DN25", OD=33.4, BendAngle=90,A=35.0,C=5.0,D=25.4,E=22.0,G=5.455,Conn="SW"])
+      obj: the "App::FeaturePython object"
+      PSize (string): nominal diameter
+      OD (float): Connecting pipe outside diameter
+      BendAngle (float): Bend angle
+      A (float): Dimension from fitting center to outer edge of ell
+      C (float): Wall thickness in socket
+      D (float): Bore internal diameter
+      E (float): Dimension from fitting center to base of socket
+      G (float): Inner body wall thickness
+      Conn (string): Connection type (SW=Socket Weld, TH=Threaded)
+
+    """
+    def __init__(self, obj, PSize="DN25", OD=33.4, BendAngle=90, A=35.0, C=5.0, D=25.4, E=22.0, G=5.455, Conn="SW"):
+        # initialize the parent class
+        super(SocketEll, self).__init__(obj)
+        # define common properties
+        obj.Proxy = self
+        obj.PType = "SocketEll"
+        obj.PRating = "3000lb"
+        obj.PSize = PSize
+        # define specific properties
+        obj.addProperty(
+            "App::PropertyLength",
+            "OD",
+            "SocketEll",
+            QT_TRANSLATE_NOOP("App::Property", "Pipe OD"),
+        ).OD = OD
+        obj.addProperty(
+            "App::PropertyAngle",
+            "BendAngle",
+            "SocketEll",
+            QT_TRANSLATE_NOOP("App::Property", "Bend Angle"),
+        ).BendAngle = BendAngle
+        obj.addProperty(
+            "App::PropertyLength",
+            "A",
+            "SocketEll",
+            QT_TRANSLATE_NOOP("App::Property", "Center to outer edge"),
+        ).A = A
+        obj.addProperty(
+            "App::PropertyLength",
+            "C",
+            "SocketEll",
+            QT_TRANSLATE_NOOP("App::Property", "Wall thickness in socket"),
+        ).C = C
+        obj.addProperty(
+            "App::PropertyLength",
+            "D",
+            "SocketEll",
+            QT_TRANSLATE_NOOP("App::Property", "Bore internal diameter"),
+        ).D = D
+        obj.addProperty(
+            "App::PropertyLength",
+            "E",
+            "SocketEll",
+            QT_TRANSLATE_NOOP("App::Property", "Center to base of socket"),
+        ).E = E
+        obj.addProperty(
+            "App::PropertyLength",
+            "G",
+            "SocketEll",
+            QT_TRANSLATE_NOOP("App::Property", "Inner body wall thickness"),
+        ).G = G
+        obj.addProperty(
+            "App::PropertyString",
+            "Conn",
+            "SocketEll",
+            QT_TRANSLATE_NOOP("App::Property", "Connection type (SW=Socket Weld, TH=Threaded)"),
+        ).Conn = Conn
+        self.execute(obj)
+
+    def onChanged(self, fp, prop):
+        return None
+    
+    def execute(self, fp):
+        from math import pi, cos, sin
+        bendRadius = fp.D/2+fp.G
+
+        #make centerline quarter sphere and rotate 180 degrees, so ports will appear in +x and +y directions (for 90 degree ell) consistent with butt weld ell
+        bendOD = Part.makeSphere(bendRadius, FreeCAD.Vector(0,0,0), FreeCAD.Vector(0,0,1), -90,90,90) 
+        bendOD.Placement = FreeCAD.Placement(FreeCAD.Vector(0,0,0),FreeCAD.Rotation(FreeCAD.Vector(0,0,1),180)).multiply(bendOD.Placement)
+
+        #Create sections between center and socket
+        body1 = Part.makeCylinder(bendRadius, fp.E, FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(1, 0,0)) 
+        body2 = Part.makeCylinder(bendRadius, fp.E, FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(-cos(fp.BendAngle*pi/180), sin(fp.BendAngle*pi/180), 0))
+        
+        #Create outer socket sections
+        socket1 = Part.makeCylinder(fp.OD/2+fp.C, fp.A-(fp.E-fp.C), FreeCAD.Vector(fp.E-fp.C, 0, 0), FreeCAD.Vector(1, 0,0)) 
+        socket2 = Part.makeCylinder(fp.OD/2+fp.C, fp.A-(fp.E-fp.C), FreeCAD.Vector(-cos(fp.BendAngle*pi/180)*(fp.E-fp.C), sin(fp.BendAngle*pi/180)*(fp.E-fp.C), 0),FreeCAD.Vector(-cos(fp.BendAngle*pi/180), sin(fp.BendAngle*pi/180), 0)) 
+
+        #fuse to create outer surface
+        base = bendOD.fuse(body1)
+        base = base.fuse(body2)
+        base = base.fuse(socket1)
+        base = base.fuse(socket2)
+
+        #create inner cutout, repeating same steps as above
+        bendRadius = fp.D/2
+
+        bendOD = Part.makeSphere(bendRadius, FreeCAD.Vector(0,0,0), FreeCAD.Vector(0,0,1), -90,90,90) 
+        bendOD.Placement = FreeCAD.Placement(FreeCAD.Vector(0,0,0),FreeCAD.Rotation(FreeCAD.Vector(0,0,1),180)).multiply(bendOD.Placement)
+
+        body1 = Part.makeCylinder(bendRadius, fp.E, FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(1, 0,0)) 
+        body2 = Part.makeCylinder(bendRadius, fp.E, FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(-cos(fp.BendAngle*pi/180), sin(fp.BendAngle*pi/180), 0)) 
+
+        socket1 = Part.makeCylinder(fp.OD/2, fp.A-(fp.E-fp.C), FreeCAD.Vector(fp.E, 0, 0), FreeCAD.Vector(1, 0,0)) 
+        socket2 = Part.makeCylinder(fp.OD/2, fp.A-(fp.E-fp.C), FreeCAD.Vector(fp.E*(-cos(fp.BendAngle*pi/180)), fp.E*(sin(fp.BendAngle*pi/180)), 0), FreeCAD.Vector(-cos(fp.BendAngle*pi/180), sin(fp.BendAngle*pi/180), 0)) 
+       
+        cutout = bendOD.fuse(body1)
+        cutout = cutout.fuse(body2)
+        cutout = cutout.fuse(socket1)
+        cutout = cutout.fuse(socket2)
+
+        #cut out inner bore
+        base = base.cut(cutout)
+
+        fp.Shape = base   
+
+        fp.Ports = [ FreeCAD.Vector(fp.E,0,  0), FreeCAD.Vector(-fp.E * cos(fp.BendAngle*pi/180), fp.E* sin(fp.BendAngle*pi/180), 0)]
+        fp.PortDirections = [FreeCAD.Vector(1,0,0), 
+                      FreeCAD.Vector(-cos(fp.BendAngle*pi/180), sin(fp.BendAngle*pi/180), 0)]
+        super(SocketEll, self).execute(fp)  # perform common operations
+
 class Tee(pypeType):
     """  
     Tee(obj, [PSize="DN150", OD=168.27, OD2=114.3,thk=7.11,thk2=6.02,C=178,M=156])
