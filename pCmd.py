@@ -635,7 +635,7 @@ def makeElbow(propList=[], pos=None, Z=None):
     else:
         pFeatures.Elbow(a)
     ViewProvider(a.ViewObject, "Quetzal_InsertElbow")
-    
+   
     # Rotate so port[0]'s local direction faces Z.
     # SocketEll port[0] direction is (1,0,0) — local +X, not +Z — so the
     # reference axis must be port[0]'s actual local direction, not (0,0,1).
@@ -2843,6 +2843,95 @@ def doSocketTee(propList=["DN25", "DN25", 33.4, 33.4, 35.0, 5.0, 25.4, 22.0, 5.4
     except Exception:
         # Nothing selected — insert at origin.
         plist.append(makeSocketTee(propList, insertOnBranch=insertOnBranch))
+
+    if pypeline:
+        for t in plist:
+            moveToPyLi(t, pypeline)
+    FreeCAD.activeDocument().commitTransaction()
+    FreeCAD.activeDocument().recompute()
+    return plist
+def makeSocketCap(propList=[], pos=None, Z=None):
+    """Adds a SocketCap object.
+    makeSocketCap(propList, pos, Z)
+      propList is one optional list with 6 elements:
+        PSize (string): nominal diameter
+        OD    (float):  connecting pipe outside diameter
+        A     (float):  cap height
+        C     (float):  socket boss wall thickness
+        E     (float):  socket depth
+        Conn  (string): connection type ("SW"=Socket Weld, "TH"=Threaded)
+      pos (vector): position of insertion; default = 0,0,0
+      Z   (vector): orientation; default = 0,0,1
+    Remember: property PRating must be defined afterwards.
+    """
+    if pos is None:
+        pos = FreeCAD.Vector(0, 0, 0)
+    if Z is None:
+        Z = FreeCAD.Vector(0, 0, 1)
+    a = FreeCAD.ActiveDocument.addObject("Part::FeaturePython", "SocketCap")
+    if len(propList) == 6:
+        pFeatures.SocketCap(a, *propList)
+    else:
+        pFeatures.SocketCap(a)
+    ViewProvider(a.ViewObject, "Quetzal_InsertCap")
+
+    # SocketCap port[0] direction is (0,0,-1) — same axis as BW Cap
+    # Rotate so port[0]'s local direction faces Z.
+    port0_local_dir = a.PortDirections[0] if a.PortDirections else FreeCAD.Vector(0, 0, 1)
+    rot = FreeCAD.Rotation(port0_local_dir, Z)
+    a.Placement.Rotation = rot.multiply(a.Placement.Rotation)
+
+    # Translate so port[0] lands exactly at pos.
+    port0_world = a.Placement.multVec(a.Ports[0])
+    a.Placement.Base = pos - port0_world
+
+    a.Label = translate("Objects", "SocketCap")
+    return a
+
+
+def doSocketCap(propList=["DN25", 33.4, 26.0, 5.0, 13.0, "SW"],
+                pypeline=None):
+    """
+    Insert a SocketCap fitting, aligning it to the selected port when possible.
+
+    propList = [
+      PSize (string): nominal diameter
+      OD    (float):  connecting pipe outside diameter
+      A     (float):  cap height
+      C     (float):  socket boss wall thickness
+      E     (float):  socket depth
+      Conn  (string): connection type ("SW" or "TH") ]
+    pypeline = string (optional PypeLine label)
+
+    Behaviour:
+      - No selection          → insert at origin.
+      - Ported object selected → align port[0] to the selected port
+                                  via alignTwoPorts.
+      - Non-ported geometry   → insert with port[0] direction matching
+                                  the selected face normal / edge tangent.
+    """
+    FreeCAD.activeDocument().openTransaction(translate("Transaction", "Insert socket cap"))
+    plist = []
+    try:
+        selex = FreeCADGui.Selection.getSelectionEx()[0]
+        usablePorts = False
+        if hasattr(selex.Object, "Ports"):
+            if hasattr(selex.Object, "PType"):
+                if selex.Object.PType != "Any":
+                    usablePorts = True
+
+        pos, Z, srcObj, srcPort = getAttachmentPoints()
+        if usablePorts:
+            cap = makeSocketCap(propList, pos, Z)
+            plist.append(cap)
+            FreeCAD.activeDocument().commitTransaction()
+            FreeCAD.activeDocument().recompute()
+            alignTwoPorts(cap, 0, srcObj, srcPort)
+        else:
+            plist.append(makeSocketCap(propList, pos, Z))
+    except Exception:
+        # Nothing selected — insert at origin.
+        plist.append(makeSocketCap(propList))
 
     if pypeline:
         for t in plist:

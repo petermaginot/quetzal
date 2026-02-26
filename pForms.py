@@ -410,7 +410,6 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
             ang = float(pq(d["BendAngle"]))
 
         if self._isSocketConn():
-            #socket/threaded
             propList = [
                 d["PSize"],
                 float(pq(d["OD"])),
@@ -425,7 +424,6 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
             self.lastElbow = pCmd.doSocketElbow(
                 propList, FreeCAD.__activePypeLine__)[-1]
         else:
-            #butt weld
             propList = [
                 d["PSize"],
                 float(pq(d["OD"])),
@@ -489,7 +487,6 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
                 obj.PRating   = self.PRating
                 FreeCAD.activeDocument().recompute()
             elif obj.PType == "Elbow" and not self._isSocketConn():
-                #butt weld elbow
                 obj.PSize = d["PSize"]
                 obj.OD    = pq(d["OD"])
                 obj.thk   = pq(d["thk"])
@@ -1563,12 +1560,15 @@ class insertUboltForm(dodoDialogs.protoPypeForm):
 
 class insertCapForm(dodoDialogs.protoPypeForm):
     """
-    Dialog to insert caps.
-    For position and orientation you can select
-      - one or more curved edges (axis and origin across the center)
-      - one or more vertexes
-      - nothing
-    Available one button to reverse the orientation of the last or selected tubes.
+    Dialog to insert a pipe cap (butt-weld) or socket/threaded cap.
+
+    Butt-weld ratings (CSV has no "Conn" column):
+      - sizeList shows PSize + OD x thk
+      - Insert calls pCmd.doCaps; Apply updates BW Cap properties.
+
+    Socket-weld / threaded ratings (CSV has Conn == "SW" or "TH"):
+      - sizeList shows PSize + OD  (no thk column in SW CSV)
+      - Insert calls pCmd.doSocketCap; Apply updates SW/TH SocketCap properties.
     """
 
     def __init__(self):
@@ -1577,6 +1577,15 @@ class insertCapForm(dodoDialogs.protoPypeForm):
         )
         self.sizeList.setCurrentRow(0)
         self.ratingList.setCurrentRow(0)
+
+        # Disconnect base changeRating and reconnect so layout refreshes on
+        # rating-type switch (BW ↔ SW/TH).
+        try:
+            self.ratingList.itemClicked.disconnect(self.changeRating)
+        except Exception:
+            pass
+        self.ratingList.itemClicked.connect(self._changeRating)
+
         self.btn1.clicked.connect(self.insert)
         self.btn2 = QPushButton(translate("insertCapForm", "Reverse"))
         self.secondCol.layout().addWidget(self.btn2)
@@ -1587,41 +1596,127 @@ class insertCapForm(dodoDialogs.protoPypeForm):
         self.btn1.setDefault(True)
         self.btn1.setFocus()
 
-        #auto-select pipe size and rating if available
         pCmd.autoSelectInPipeForm(self)
 
         self.show()
-        self.lastPipe = None
+        self.lastCap = None
 
-    def reverse(self):
-        selCaps = [
-            p
-            for p in FreeCADGui.Selection.getSelection()
-            if hasattr(p, "PType") and p.PType == "Cap"
-        ]
-        if len(selCaps):
-            for p in selCaps:
-                pCmd.rotateTheTubeAx(p, FreeCAD.Vector(1, 0, 0), 180)
-        else:
-            pCmd.rotateTheTubeAx(self.lastCap, FreeCAD.Vector(1, 0, 0), 180)
+    # ── helper: detect SW/TH rating ──────────────────────────────────────────
+
+    def _isSocketConn(self):
+        """Return True when the loaded CSV is a SW or TH (socket/threaded) table."""
+        for row in self.pipeDictList:
+            if row.get("Conn", "").strip().upper() in ("SW", "TH"):
+                return True
+        return False
+
+    # ── fillSizes override ───────────────────────────────────────────────────
+
+    def fillSizes(self):
+        """Load Cap_<PRating>.csv and populate sizeList.
+
+        BW  : label = PSize  OD x thk
+        SW/TH: label = PSize  OD   (no thk column)
+        """
+        self.sizeList.clear()
+        self.pipeDictList = []
+        fname = "Cap_" + self.PRating + ".csv"
+        fpath = join(dirname(abspath(__file__)), "tablez", fname)
+        try:
+            with open(fpath, "r") as fh:
+                self.pipeDictList = list(csv.DictReader(fh, delimiter=";"))
+        except Exception:
+            return
+
+        for row in self.pipeDictList:
+            if self._isSocketConn():
+                # SW/TH: no thk column
+                if qu:
+                    label = qu.format_psize(row["PSize"]) + "  " + qu.format_dim(row["OD"])
+                else:
+                    label = row["PSize"] + "  " + row.get("OD", "")
+            else:
+                # BW: standard PSize + OD x thk
+                if qu:
+                    label = qu.format_size_label(row)
+                else:
+                    label = row["PSize"] + "  " + row.get("OD", "") + "x" + row.get("thk", "")
+            self.sizeList.addItem(label)
+
+    # ── rating-change handler ────────────────────────────────────────────────
+
+    def _changeRating(self, item):
+        self.PRating = item.text()
+        self.currentRatingLab.setText(
+            translate("protoPypeForm", "Rating: ") + self.PRating)
+        self.fillSizes()
+        self.sizeList.setCurrentRow(0)
+
+    # ── insert ───────────────────────────────────────────────────────────────
 
     def insert(self):
-        DN = OD = thk = PRating = None
         d = self.pipeDictList[self.sizeList.currentRow()]
-        propList = [d["PSize"], float(pq(d["OD"])), float(pq(d["thk"]))]
 
-        self.lastCap = pCmd.doCaps(propList, FreeCAD.__activePypeLine__)[-1]
+        if self._isSocketConn():
+            # ── Socket / threaded cap ────────────────────────────────────
+            propList = [
+                d["PSize"],
+                float(pq(d["OD"])),
+                float(pq(d["A"])),
+                float(pq(d["C"])),
+                float(pq(d["E"])),
+                d.get("Conn", "SW"),
+            ]
+            self.lastCap = pCmd.doSocketCap(propList, FreeCAD.__activePypeLine__)[-1]
+        else:
+            # ── Butt-weld cap ────────────────────────────────────────────
+            propList = [d["PSize"], float(pq(d["OD"])), float(pq(d["thk"]))]
+            self.lastCap = pCmd.doCaps(propList, FreeCAD.__activePypeLine__)[-1]
+
         FreeCAD.activeDocument().recompute()
         FreeCADGui.Selection.clearSelection()
         FreeCADGui.Selection.addSelection(self.lastCap)
-        
+
+    # ── reverse ──────────────────────────────────────────────────────────────
+
+    def reverse(self):
+        """Flip selected caps (or the last inserted cap) 180° around X."""
+        selCaps = [
+            p for p in FreeCADGui.Selection.getSelection()
+            if hasattr(p, "PType") and p.PType in ("Cap", "SocketCap")
+        ]
+        if selCaps:
+            for p in selCaps:
+                pCmd.rotateTheTubeAx(p, FreeCAD.Vector(1, 0, 0), 180)
+        elif self.lastCap:
+            pCmd.rotateTheTubeAx(self.lastCap, FreeCAD.Vector(1, 0, 0), 180)
+
+    # ── apply ────────────────────────────────────────────────────────────────
+
     def apply(self):
+        """Push current size/rating onto all selected cap objects."""
+        d = self.pipeDictList[self.sizeList.currentRow()]
+
         for obj in FreeCADGui.Selection.getSelection():
-            d = self.pipeDictList[self.sizeList.currentRow()]
-            if hasattr(obj, "PType") and obj.PType == self.PType:
-                obj.PSize = d["PSize"]
-                obj.OD = pq(d["OD"])
-                obj.thk = pq(d["thk"])
+            if not hasattr(obj, "PType"):
+                continue
+
+            # ── Socket / threaded cap ────────────────────────────────────
+            if obj.PType == "SocketCap" and self._isSocketConn():
+                obj.PSize   = d["PSize"]
+                obj.OD      = pq(d["OD"])
+                obj.A       = pq(d["A"])
+                obj.C       = pq(d["C"])
+                obj.E       = pq(d["E"])
+                obj.Conn    = d.get("Conn", "SW")
+                obj.PRating = self.PRating
+                FreeCAD.activeDocument().recompute()
+
+            # ── Butt-weld cap ────────────────────────────────────────────
+            elif obj.PType == "Cap" and not self._isSocketConn():
+                obj.PSize   = d["PSize"]
+                obj.OD      = pq(d["OD"])
+                obj.thk     = pq(d["thk"])
                 obj.PRating = self.PRating
                 FreeCAD.activeDocument().recompute()
 

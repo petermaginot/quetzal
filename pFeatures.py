@@ -1064,14 +1064,14 @@ class SocketTee(pypeType):
             "App::PropertyLength",
             "A",
             "SocketTee",
-            QT_TRANSLATE_NOOP("App::Property", "Center to outer face of socket"),
+            QT_TRANSLATE_NOOP("App::Property", "Centre to outer face of socket"),
         ).A = A
 
         obj.addProperty(
             "App::PropertyLength",
             "C",
             "SocketTee",
-            QT_TRANSLATE_NOOP("App::Property", "Socket wall thickness"),
+            QT_TRANSLATE_NOOP("App::Property", "Socket boss wall thickness"),
         ).C = C
 
         obj.addProperty(
@@ -1085,7 +1085,7 @@ class SocketTee(pypeType):
             "App::PropertyLength",
             "E",
             "SocketTee",
-            QT_TRANSLATE_NOOP("App::Property", "Center to base of socket"),
+            QT_TRANSLATE_NOOP("App::Property", "Centre to base of socket"),
         ).E = E
 
         obj.addProperty(
@@ -1122,7 +1122,7 @@ class SocketTee(pypeType):
             centerBodyRadius, float(fp.E),
             FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 1, 0))
 
-        # Socket — all OD2
+        # Socket OD
         socket1 = Part.makeCylinder(
             float(fp.OD) / 2 + float(fp.C), float(fp.A) - (float(fp.E) - float(fp.C)),
             FreeCAD.Vector(0, 0,  float(fp.E) - float(fp.C)), FreeCAD.Vector(0, 0,  1))
@@ -2294,3 +2294,73 @@ class Outlet(pypeType):
         fp.PortDirections = [port_dir]
 
         super(Outlet, self).execute(fp)   # positionBySupport()
+
+class SocketCap(pypeType):
+    """  
+    SocketCap(obj, [PSize="DN25", OD=33.4, A=26.0,C=5.0,E=13.0,Conn="SW"])
+      obj: the "App::FeaturePython object"
+      PSize (string): nominal diameter
+      OD (float): Connecting pipe outside diameter
+      BendAngle (float): Bend angle
+      A (float): Cap height
+      C (float): Wall thickness in socket
+      E (float): Socket depth
+      Conn (string): Connection type (SW=Socket Weld, TH=Threaded)
+
+    """
+    def __init__(self, obj, PSize="DN25", OD=33.4, A=26.0,C=5.0,E=13.0,Conn="SW"):
+        super(SocketCap, self).__init__(obj)
+        obj.Proxy = self
+        obj.PType = "SocketCap"
+        obj.PRating = "3000lb"
+        obj.PSize = PSize
+        # define specific properties
+        obj.addProperty(
+            "App::PropertyLength",
+            "OD",
+            "SocketCap",
+            QT_TRANSLATE_NOOP("App::Property", "Pipe OD"),
+        ).OD = OD       
+        obj.addProperty(
+            "App::PropertyLength",
+            "A",
+            "SocketCap",
+            QT_TRANSLATE_NOOP("App::Property", "Cap height"),
+        ).A = A
+        obj.addProperty(
+            "App::PropertyLength",
+            "C",
+            "SocketCap",
+            QT_TRANSLATE_NOOP("App::Property", "Wall thickness in socket"),
+        ).C = C
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "E",
+            "SocketCap",
+            QT_TRANSLATE_NOOP("App::Property", "Socket depth"),
+        ).E = E
+        obj.addProperty(
+            "App::PropertyString",
+            "Conn",
+            "SocketCap",
+            QT_TRANSLATE_NOOP("App::Property", "Connection type (SW=Socket Weld, TH=Threaded)"),
+        ).Conn = Conn
+        self.execute(obj)
+
+    def onChanged(self, fp, prop):
+        return None
+
+    def execute(self, fp):
+
+        base = Part.makeCylinder(float(fp.C)+float(fp.OD)/2, fp.A, FreeCAD.Vector(0, 0, -float(fp.E)), FreeCAD.Vector(0, 0,1)) 
+ 
+        socket = Part.makeCylinder(float(fp.OD)/2, float(fp.E), FreeCAD.Vector(0, 0, -float(fp.E)), FreeCAD.Vector(0, 0,1))
+
+        base = base.cut(socket)
+
+        fp.Shape = base   
+
+        fp.Ports = [ FreeCAD.Vector(0,0, 0)]
+        fp.PortDirections = [FreeCAD.Vector(0,0,-1)]
+        super(SocketCap, self).execute(fp)  # perform common operations
