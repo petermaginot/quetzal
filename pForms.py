@@ -242,16 +242,12 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
     Butt-weld ratings (CSV has no "Conn" column, or Conn == "BW"):
       - sizeList shows PSize + OD x thk
       - edit1 = bend angle override, edit2 = bend radius override
-      - Insert calls pCmd.doElbow, Apply updates BW-specific properties
+      - Insert calls pCmd.doElbow; Apply updates BW-specific properties.
 
     Socket-weld / threaded ratings (CSV has Conn == "SW" or "TH"):
-      - sizeList shows PSize + BendAngle (multiple rows per PSize for diff angles)
-      - edit1 = bend angle override only (no bend radius)
-      - edit2 is hidden
-      - Insert calls pCmd.doSocketElbow, Apply updates SW/TH-specific properties
-
-    The Trim/Extend button only acts on pipes (fCmd.beams() requires Height +
-    Profile, which SocketEll does not have, so socket elbows are never matched).
+      - sizeList shows PSize + BendAngle° (one row per PSize+angle combination)
+      - edit2 (bend radius) is hidden
+      - Insert calls pCmd.doSocketElbow; Apply updates SW/TH-specific properties.
     """
 
     def __init__(self):
@@ -266,8 +262,8 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
         self.sizeList.setCurrentRow(0)
         self.ratingList.setCurrentRow(0)
 
-        # Disconnect the base-class changeRating slot and reconnect to our own
-        # so we can refresh the form layout whenever the rating type changes.
+        # Disconnect base changeRating and reconnect to our handler so the
+        # layout is refreshed whenever the rating type changes.
         try:
             self.ratingList.itemClicked.disconnect(self.changeRating)
         except Exception:
@@ -318,32 +314,23 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
         self.screenDial.layout().addWidget(self.lab)
         self.firstCol.layout().addWidget(self.screenDial)
 
-        # auto-select pipe size and rating if available
         pCmd.autoSelectInPipeForm(self)
-
-        # Refresh layout to match the initial rating type
         self._refreshLayout()
 
         self.show()
         self.lastElbow = None
         self.lastAngle = 0
 
-    # ── helper: detect socket/threaded conn type from loaded CSV ────────────
+    # ── helper: detect SW/TH rating ──────────────────────────────────────────
 
     def _isSocketConn(self):
-        """Return True when the current CSV is a SW or TH (socket/threaded) table.
-
-        Detection rule: if any row in pipeDictList has a non-empty "Conn" key
-        whose value is "SW" or "TH" the rating is a socket/threaded type.
-        A missing "Conn" column, or Conn == "BW", means butt-weld.
-        """
+        """Return True when the loaded CSV is a SW or TH (socket/threaded) table."""
         for row in self.pipeDictList:
-            conn = row.get("Conn", "").strip().upper()
-            if conn in ("SW", "TH"):
+            if row.get("Conn", "").strip().upper() in ("SW", "TH"):
                 return True
         return False
 
-    # ── fillSizes override ──────────────────────────────────────────────────
+    # ── fillSizes override ───────────────────────────────────────────────────
 
     def fillSizes(self):
         """Load the CSV for the current rating and populate sizeList.
@@ -366,17 +353,16 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
             return
 
         if self._isSocketConn():
-            # Socket/threaded: show PSize + bend angle
+            # SW/TH: one list entry per row (PSize + bend angle)
             for row in self.pipeDictList:
                 ang_str = row.get("BendAngle", "")
                 if qu:
-                    psize_lbl = qu.format_psize(row["PSize"])
-                    label = psize_lbl + "  " + ang_str + "°"
+                    label = qu.format_psize(row["PSize"]) + "  " + ang_str + "°"
                 else:
                     label = row["PSize"] + "  " + ang_str + "°"
                 self.sizeList.addItem(label)
         else:
-            # Butt-weld: show PSize + OD x thk (standard format)
+            # BW: standard PSize + OD x thk
             for row in self.pipeDictList:
                 if qu:
                     label = qu.format_size_label(row)
@@ -384,23 +370,21 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
                     label = row["PSize"] + "  " + row.get("OD", "") + "x" + row.get("thk", "")
                 self.sizeList.addItem(label)
 
-        # Refresh widget visibility to match the newly loaded type
         self._refreshLayout()
 
-    # ── rating-change handler ───────────────────────────────────────────────
+    # ── rating-change handler ────────────────────────────────────────────────
 
     def _changeRating(self, item):
-        """Handle rating list click: update PRating, reload sizes, refresh layout."""
         self.PRating = item.text()
         self.currentRatingLab.setText(
             translate("protoPypeForm", "Rating: ") + self.PRating)
         self.fillSizes()
         self.sizeList.setCurrentRow(0)
 
-    # ── layout refresh ──────────────────────────────────────────────────────
+    # ── layout refresh ───────────────────────────────────────────────────────
 
     def _refreshLayout(self):
-        """Show/hide edit2 (bend radius) based on whether the current CSV is SW/TH."""
+        """Show/hide edit2 (bend radius) based on whether the CSV is SW/TH."""
         if self._isSocketConn():
             self.edit2.hide()
             self.edit2.setPlaceholderText("")
@@ -410,14 +394,13 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
                 translate("insertElbowForm", "<bend radius> (") + _unit_hint + ")")
             self.edit2.show()
 
-    # ── insert ──────────────────────────────────────────────────────────────
+    # ── insert ───────────────────────────────────────────────────────────────
 
     def insert(self):
         self.lastAngle = 0
         self.dial.setValue(0)
         d = self.pipeDictList[self.sizeList.currentRow()]
 
-        # Resolve bend angle: user override first, then CSV value
         try:
             ang = float(self.edit1.text())
             if ang > 180:
@@ -427,7 +410,7 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
             ang = float(pq(d["BendAngle"]))
 
         if self._isSocketConn():
-            # ── Socket / threaded elbow ──────────────────────────────────
+            #socket/threaded
             propList = [
                 d["PSize"],
                 float(pq(d["OD"])),
@@ -442,7 +425,7 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
             self.lastElbow = pCmd.doSocketElbow(
                 propList, FreeCAD.__activePypeLine__)[-1]
         else:
-            # ── Butt-weld elbow ──────────────────────────────────────────
+            #butt weld
             propList = [
                 d["PSize"],
                 float(pq(d["OD"])),
@@ -457,56 +440,34 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
 
         FreeCAD.activeDocument().recompute()
 
-    # ── trim ────────────────────────────────────────────────────────────────
+    # ── trim ─────────────────────────────────────────────────────────────────
 
     def trim(self):
-        """Trim/extend the selected pipe to the selected elbow edges.
-
-        fCmd.beams() only matches objects with both 'Height' and 'Profile'
-        properties, so SocketEll objects are never included — this method is
-        safe for both butt-weld and socket-elbow workflows.
-        """
         if len(fCmd.beams()) == 1:
             pipe = fCmd.beams()[0]
             comPipeEdges = [e.CenterOfMass for e in pipe.Shape.Edges]
             eds = [e for e in fCmd.edges() if e.CenterOfMass not in comPipeEdges]
-            FreeCAD.activeDocument().openTransaction(
-                translate("Transaction", "Trim pipes"))
+            FreeCAD.activeDocument().openTransaction(translate("Transaction", "Trim pipes"))
             for edge in eds:
                 fCmd.extendTheBeam(fCmd.beams()[0], edge)
             FreeCAD.activeDocument().commitTransaction()
             FreeCAD.activeDocument().recompute()
         else:
-            FreeCAD.Console.PrintError(
-                translate("insertElbowForm", "Wrong selection\n"))
+            FreeCAD.Console.PrintError(translate("insertElbowForm", "Wrong selection\n"))
 
-    # ── rotatePort ──────────────────────────────────────────────────────────
+    # ── rotatePort ───────────────────────────────────────────────────────────
 
     def rotatePort(self):
-        """Rotate the last-inserted elbow port via the dial.
-
-        Only meaningful for butt-weld elbows; for socket elbows the dial is
-        still wired but rotateTheElbowPort gracefully handles the call because
-        SocketEll has Ports defined.
-        """
         if self.lastElbow:
             pCmd.rotateTheElbowPort(self.lastElbow, 0, self.lastAngle * -1)
             self.lastAngle = self.dial.value()
             pCmd.rotateTheElbowPort(self.lastElbow, 0, self.lastAngle)
-            self.lab.setText(
-                str(self.dial.value()) + translate("insertElbowForm", " deg"))
+            self.lab.setText(str(self.dial.value()) + translate("insertElbowForm", " deg"))
 
-    # ── apply ───────────────────────────────────────────────────────────────
+    # ── apply ────────────────────────────────────────────────────────────────
 
     def apply(self):
-        """Push current size/rating onto all selected elbow objects.
-
-        Detects whether each selected object is a butt-weld Elbow or a
-        socket/threaded SocketEll and applies the matching set of properties.
-        """
         d = self.pipeDictList[self.sizeList.currentRow()]
-
-        # Resolve bend angle
         try:
             ang = float(self.edit1.text())
         except (ValueError, AttributeError):
@@ -515,30 +476,24 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
         for obj in FreeCADGui.Selection.getSelection():
             if not hasattr(obj, "PType"):
                 continue
-
-            # ── Socket / threaded ell ────────────────────────────────────
             if obj.PType == "SocketEll" and self._isSocketConn():
-                obj.PSize      = d["PSize"]
-                obj.OD         = pq(d["OD"])
-                obj.BendAngle  = ang
-                obj.A          = pq(d["A"])
-                obj.C          = pq(d["C"])
-                obj.D          = pq(d["D"])
-                obj.E          = pq(d["E"])
-                obj.G          = pq(d["G"])
-                obj.Conn       = d.get("Conn", "SW")
-                obj.PRating    = self.PRating
+                obj.PSize     = d["PSize"]
+                obj.OD        = pq(d["OD"])
+                obj.BendAngle = ang
+                obj.A         = pq(d["A"])
+                obj.C         = pq(d["C"])
+                obj.D         = pq(d["D"])
+                obj.E         = pq(d["E"])
+                obj.G         = pq(d["G"])
+                obj.Conn      = d.get("Conn", "SW")
+                obj.PRating   = self.PRating
                 FreeCAD.activeDocument().recompute()
-
-            # ── Butt-weld elbow ──────────────────────────────────────────
             elif obj.PType == "Elbow" and not self._isSocketConn():
+                #butt weld elbow
                 obj.PSize = d["PSize"]
                 obj.OD    = pq(d["OD"])
                 obj.thk   = pq(d["thk"])
-                if self.edit1.text():
-                    obj.BendAngle = float(self.edit1.text())
-                else:
-                    obj.BendAngle = pq(d["BendAngle"])
+                obj.BendAngle = ang
                 if self.edit2.text():
                     obj.BendRadius = float(pq(self.edit2.text()))
                 else:
@@ -546,42 +501,37 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
                 obj.PRating = self.PRating
                 FreeCAD.activeDocument().recompute()
 
-    # ── reverse ─────────────────────────────────────────────────────────────
+    # ── reverse ──────────────────────────────────────────────────────────────
 
     def reverse(self):
-        """Flip the last inserted elbow 180° around its port[0] axis."""
         if self.lastElbow is None:
             return
-
         port = 0
-        initial_port_pos = self.lastElbow.Placement.multVec(
-            self.lastElbow.Ports[port])
-
+        initial_port_pos = self.lastElbow.Placement.multVec(self.lastElbow.Ports[port])
         crossVector1 = FreeCAD.Vector(0, 0, 1)
         crossVector2 = FreeCAD.Vector(self.lastElbow.Ports[port])
-        # Avoid degenerate cross products
         if crossVector2 == FreeCAD.Vector(0, 0, 0):
             crossVector2 = FreeCAD.Vector(0, 1, 0)
         crossVector2.normalize()
         if crossVector2 == crossVector1:
             crossVector1 = FreeCAD.Vector(0, 1, 0)
-
-        pCmd.rotateTheTubeAx(
-            self.lastElbow, crossVector1.cross(crossVector2), angle=180)
-        final_port_pos = self.lastElbow.Placement.multVec(
-            self.lastElbow.Ports[port])
-
-        dist = initial_port_pos - final_port_pos
-        self.lastElbow.Placement.move(dist)
+        pCmd.rotateTheTubeAx(self.lastElbow, crossVector1.cross(crossVector2), angle=180)
+        final_port_pos = self.lastElbow.Placement.multVec(self.lastElbow.Ports[port])
+        self.lastElbow.Placement.move(initial_port_pos - final_port_pos)
 
 class insertTeeForm(dodoDialogs.protoPypeForm):
     """
-    Dialog to insert one tee.
-    Primary list  = run sizes  (PSize / OD / thk).
-    Secondary list = branch sizes available for the selected run
-                     (derived from OD2/thk2 columns of matching rows).
-    This mirrors the reducer form layout so that DN/NPS toggling works
-    independently on both lists.
+    Dialog to insert one tee (butt-weld) or socket/threaded tee.
+
+    Butt-weld ratings (CSV has no "Conn" column, or Conn == "BW"):
+      - Primary sizeList   : unique run PSize values, labelled PSize + OD x thk
+      - Secondary branchList: branch sizes for the selected run (OD2 x thk2)
+      - Insert calls pCmd.doTees; Apply updates BW Tee properties.
+
+    Socket-weld / threaded ratings (CSV has Conn == "SW" or "TH"):
+      - Primary sizeList   : unique run PSize values, labelled PSize + OD
+      - Secondary branchList: branch sizes for the selected run (PSizeBranch + OD2)
+      - Insert calls pCmd.doSocketTee; Apply updates SW/TH SocketTee properties.
     """
 
     def __init__(self):
@@ -595,11 +545,17 @@ class insertTeeForm(dodoDialogs.protoPypeForm):
         )
         self.sizeList.setCurrentRow(0)
         self.ratingList.setCurrentRow(0)
-        self.ratingList.itemClicked.disconnect(self.changeRating)
-        self.ratingList.itemClicked.connect(self.changeRating2)
 
-        # Branch size list (secondary, in secondCol above the buttons)
-        self._branchDictList = []   # list of full CSV row dicts for current run
+        # Disconnect base changeRating and reconnect to our handler so the
+        # branch list format is refreshed when the rating type changes.
+        try:
+            self.ratingList.itemClicked.disconnect(self.changeRating)
+        except Exception:
+            pass
+        self.ratingList.itemClicked.connect(self._changeRating)
+
+        # Branch size list
+        self._branchDictList = []
         self._branchList = QListWidget()
         self._branchList.setMaximumHeight(100)
         branchLabel = QLabel(translate("insertTeeForm", "Branch size:"))
@@ -625,7 +581,7 @@ class insertTeeForm(dodoDialogs.protoPypeForm):
         self.btn1.setDefault(True)
         self.btn1.setFocus()
 
-        # Branch rotation dial (in firstCol below the run size list)
+        # Branch rotation dial
         self.screenDial = QWidget()
         self.screenDial.setLayout(QHBoxLayout())
         self.dial = QDial()
@@ -642,7 +598,6 @@ class insertTeeForm(dodoDialogs.protoPypeForm):
         self.screenDial.layout().addWidget(self.lab)
         self.firstCol.layout().addWidget(self.screenDial)
 
-        # Wire up run selection -> repopulate branch list
         self.sizeList.currentItemChanged.connect(self.fillBranch)
 
         pCmd.autoSelectInPipeForm(self)
@@ -651,33 +606,49 @@ class insertTeeForm(dodoDialogs.protoPypeForm):
         self.lastTee   = None
         self.lastAngle = 0
 
+    # ── helper: detect SW/TH rating ──────────────────────────────────────────
+
+    def _isSocketConn(self):
+        """Return True when the loaded CSV is a SW or TH (socket/threaded) table."""
+        for row in self.pipeDictList:
+            if row.get("Conn", "").strip().upper() in ("SW", "TH"):
+                return True
+        return False
+
     # ── fillSizes override ───────────────────────────────────────────────────
-    # Show only unique run sizes in the primary list.
-    # pipeDictList keeps ALL rows (needed to build branch list).
 
     def fillSizes(self):
+        """Load Tee_<PRating>.csv and populate the run sizeList.
+
+        BW : label = PSize  OD x thk  (deduplicated by PSize)
+        SW/TH: label = PSize  OD       (no thk column; deduplicated by PSize)
+        """
         self.sizeList.clear()
         self.pipeDictList = []
         fname = "Tee_" + self.PRating + ".csv"
         fpath = join(dirname(abspath(__file__)), "tablez", fname)
         try:
             with open(fpath, "r") as fh:
-                import csv as _csv
-                self.pipeDictList = list(_csv.DictReader(fh, delimiter=";"))
+                self.pipeDictList = list(csv.DictReader(fh, delimiter=";"))
         except Exception:
             return
 
-        # Deduplicate run sizes (PSize column) while preserving CSV order.
-        # Use the first row for each PSize to get OD/thk for the label.
         seen_psize = []
         for row in self.pipeDictList:
             ps = row["PSize"]
             if ps not in seen_psize:
                 seen_psize.append(ps)
-                if qu:
-                    label = qu.format_size_label(row)
+                if self._isSocketConn():
+                    # SW/TH: no thk column
+                    if qu:
+                        label = qu.format_psize(ps) + "  " + qu.format_dim(row["OD"])
+                    else:
+                        label = ps + "  " + row.get("OD", "")
                 else:
-                    label = ps + "  " + row.get("OD", "") + "x" + row.get("thk", "")
+                    if qu:
+                        label = qu.format_size_label(row)
+                    else:
+                        label = ps + "  " + row.get("OD", "") + "x" + row.get("thk", "")
                 self.sizeList.addItem(label)
 
         if hasattr(self, "_branchList"):
@@ -686,13 +657,12 @@ class insertTeeForm(dodoDialogs.protoPypeForm):
     # ── fillBranch ───────────────────────────────────────────────────────────
 
     def fillBranch(self):
-        """Populate _branchList from rows matching the currently selected run."""
+        """Populate _branchList from rows matching the currently selected run PSize."""
         self._branchList.clear()
         self._branchDictList = []
         if not self.pipeDictList:
             return
 
-        # Map sizeList row index -> PSize (deduplicated, order-preserved)
         seen = []
         for row in self.pipeDictList:
             if row["PSize"] not in seen:
@@ -709,24 +679,26 @@ class insertTeeForm(dodoDialogs.protoPypeForm):
                 continue
             self._branchDictList.append(row)
             branch_psize = row.get("PSizeBranch", "")
-            if qu:
-                # Build a synthetic row for the branch so format_size_label
-                # shows "NPS 2  2.375 in x 0.154 in" using OD2/thk2 values
-                branch_row = {
-                    "PSize": branch_psize,
-                    "OD":    row["OD2"],
-                    "thk":   row["thk2"],
-                }
-                label = qu.format_size_label(branch_row)
+            if self._isSocketConn():
+                # SW/TH: no thk2 — show PSizeBranch + OD2
+                if qu:
+                    label = qu.format_psize(branch_psize) + "  " + qu.format_dim(row["OD2"])
+                else:
+                    label = branch_psize + "  " + row.get("OD2", "")
             else:
-                label = branch_psize + "  " + row["OD2"] + "x" + row["thk2"]
+                # BW: show PSizeBranch + OD2 x thk2
+                if qu:
+                    branch_row = {"PSize": branch_psize, "OD": row["OD2"], "thk": row["thk2"]}
+                    label = qu.format_size_label(branch_row)
+                else:
+                    label = branch_psize + "  " + row["OD2"] + "x" + row["thk2"]
             self._branchList.addItem(label)
 
         self._branchList.setCurrentRow(0)
 
-    # ── changeRating2 ────────────────────────────────────────────────────────
+    # ── rating-change handler ────────────────────────────────────────────────
 
-    def changeRating2(self, item):
+    def _changeRating(self, item):
         self.PRating = item.text()
         self.currentRatingLab.setText(
             translate("protoPypeForm", "Rating: ") + self.PRating)
@@ -746,17 +718,36 @@ class insertTeeForm(dodoDialogs.protoPypeForm):
             return
         d = self._branchDictList[branch_idx]
 
-        propList = [
-            d["PSize"],
-            float(pq(d["OD"])),
-            float(pq(d["OD2"])),
-            float(pq(d["thk"])),
-            float(pq(d["thk2"])),
-            float(pq(d["C"])),
-            float(pq(d["M"])),
-        ]
-        self.lastTee = pCmd.doTees(
-            propList, FreeCAD.__activePypeLine__, insertOnBranch)[-1]
+        if self._isSocketConn():
+            # ── Socket / threaded tee ────────────────────────────────────
+            propList = [
+                d["PSize"],
+                d.get("PSizeBranch", d["PSize"]),
+                float(pq(d["OD"])),
+                float(pq(d["OD2"])),
+                float(pq(d["A"])),
+                float(pq(d["C"])),
+                float(pq(d["D"])),
+                float(pq(d["E"])),
+                float(pq(d["G"])),
+                d.get("Conn", "SW"),
+            ]
+            self.lastTee = pCmd.doSocketTee(
+                propList, FreeCAD.__activePypeLine__, insertOnBranch)[-1]
+        else:
+            # ── Butt-weld tee ────────────────────────────────────────────
+            propList = [
+                d["PSize"],
+                float(pq(d["OD"])),
+                float(pq(d["OD2"])),
+                float(pq(d["thk"])),
+                float(pq(d["thk2"])),
+                float(pq(d["C"])),
+                float(pq(d["M"])),
+            ]
+            self.lastTee = pCmd.doTees(
+                propList, FreeCAD.__activePypeLine__, insertOnBranch)[-1]
+
         FreeCAD.activeDocument().recompute()
         FreeCADGui.Selection.clearSelection()
         FreeCADGui.Selection.addSelection(self.lastTee)
@@ -781,17 +772,13 @@ class insertTeeForm(dodoDialogs.protoPypeForm):
     # ── rotatePort ───────────────────────────────────────────────────────────
 
     def rotatePort(self):
-        insertOnBranch = self.branchRadio.isChecked()
-        if insertOnBranch:
-            pCmd.rotateTheTeePort(self.lastTee, 2, self.lastAngle * -1)
-            self.lastAngle = self.dial.value()
-            pCmd.rotateTheTeePort(self.lastTee, 2, self.lastAngle)
-        else:
-            pCmd.rotateTheTeePort(self.lastTee, 0, self.lastAngle * -1)
-            self.lastAngle = self.dial.value()
-            pCmd.rotateTheTeePort(self.lastTee, 0, self.lastAngle)
-        self.lab.setText(
-            str(self.dial.value()) + translate("insertTeeForm", " deg"))
+        if self.lastTee is None:
+            return
+        port = 2 if self.branchRadio.isChecked() else 0
+        pCmd.rotateTheTeePort(self.lastTee, port, self.lastAngle * -1)
+        self.lastAngle = self.dial.value()
+        pCmd.rotateTheTeePort(self.lastTee, port, self.lastAngle)
+        self.lab.setText(str(self.dial.value()) + translate("insertTeeForm", " deg"))
 
     # ── apply ────────────────────────────────────────────────────────────────
 
@@ -800,32 +787,47 @@ class insertTeeForm(dodoDialogs.protoPypeForm):
         if branch_idx < 0 or branch_idx >= len(self._branchDictList):
             return
         d = self._branchDictList[branch_idx]
+
         for obj in FreeCADGui.Selection.getSelection():
-            if hasattr(obj, "PType") and obj.PType == self.PType:
-                obj.PSize  = d["PSize"]
-                obj.OD     = pq(d["OD"])
-                obj.OD2    = pq(d["OD2"])
-                obj.thk    = pq(d["thk"])
-                obj.thk2   = pq(d["thk2"])
+            if not hasattr(obj, "PType"):
+                continue
+            if obj.PType == "SocketTee" and self._isSocketConn():
+                obj.PSize       = d["PSize"]
+                obj.PSizeBranch = d.get("PSizeBranch", d["PSize"])
+                obj.OD          = pq(d["OD"])
+                obj.OD2         = pq(d["OD2"])
+                obj.A           = pq(d["A"])
+                obj.C           = pq(d["C"])
+                obj.D           = pq(d["D"])
+                obj.E           = pq(d["E"])
+                obj.G           = pq(d["G"])
+                obj.Conn        = d.get("Conn", "SW")
+                obj.PRating     = self.PRating
+                FreeCAD.activeDocument().recompute()
+            elif obj.PType == "Tee" and not self._isSocketConn():
+                obj.PSize   = d["PSize"]
+                obj.OD      = pq(d["OD"])
+                obj.OD2     = pq(d["OD2"])
+                obj.thk     = pq(d["thk"])
+                obj.thk2    = pq(d["thk2"])
                 obj.PRating = self.PRating
                 FreeCAD.activeDocument().recompute()
 
     # ── reverse ──────────────────────────────────────────────────────────────
 
     def reverse(self):
+        if self.lastTee is None:
+            return
         port = 2 if self.branchRadio.isChecked() else 0
-        initial_port_pos = self.lastTee.Placement.multVec(
-            self.lastTee.Ports[port])
+        initial_port_pos = self.lastTee.Placement.multVec(self.lastTee.Ports[port])
         crossVector1 = FreeCAD.Vector(1, 0, 0)
         crossVector2 = self.lastTee.Ports[port].normalize()
         if crossVector2 == crossVector1:
             crossVector1 = FreeCAD.Vector(0, 1, 0)
         if crossVector2 == FreeCAD.Vector(0, 0, 0):
             crossVector2 = FreeCAD.Vector(0, 1, 0)
-        pCmd.rotateTheTubeAx(
-            self.lastTee, crossVector1.cross(crossVector2), angle=180)
-        final_port_pos = self.lastTee.Placement.multVec(
-            self.lastTee.Ports[port])
+        pCmd.rotateTheTubeAx(self.lastTee, crossVector1.cross(crossVector2), angle=180)
+        final_port_pos = self.lastTee.Placement.multVec(self.lastTee.Ports[port])
         self.lastTee.Placement.move(initial_port_pos - final_port_pos)
 
 

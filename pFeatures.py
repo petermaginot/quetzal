@@ -924,8 +924,7 @@ class Tee(pypeType):
         if fp.M == fp.C:
             #model as quarter torus centered 1 mm off of OD, with a diameter of OD, mirrored across XY plane. Can add internal torus at some point perhaps if you feel like it.
             #1 mm offset
-            
-            
+
             quarterTorus = Part.makeTorus((fp.OD + fp.offset)/2, fp.OD/2, FreeCAD.Vector(0,(fp.OD+fp.offset)/2,-(fp.OD+fp.offset)/2), FreeCAD.Vector(1,0,0),-180,180,90)
             box = Part.makeBox(fp.OD, (fp.OD+fp.offset)/2, (fp.OD+fp.offset)/2,FreeCAD.Vector(-fp.OD/2,0,0), FreeCAD.Vector(0,0,1))
             cutcylinder = Part.makeCylinder((fp.OD+fp.offset)/2, fp.OD, FreeCAD.Vector(-fp.OD/2,(fp.OD+fp.offset)/2,(fp.OD+fp.offset)/2),FreeCAD.Vector(1,0,0))
@@ -952,13 +951,15 @@ class Tee(pypeType):
             Base = Base.cut(BranchHole)
             Base = Base.removeSplitter()
         
-
+            
             # Identify the intersection edges geometrically:
             # They are the edges shared between the run cylinder surface and the
             # branch cylinder surface -- i.e. edges whose midpoint lies on BOTH
             # the run OD surface (distance from Z-axis == OD/2) and the branch OD
             # surface (distance from Y-axis == OD2/2), within a small tolerance.
+            
             import math
+
             tol = 0.5  # mm -- generous enough for floating-point geometry
 
             fillet_edges = []
@@ -979,7 +980,7 @@ class Tee(pypeType):
                         fillet_edges.append(edge)
                 except Exception:
                     continue
-
+            
             # Apply fillet only when valid intersection edges were found
             if fillet_edges:
                 fillet_r = fp.M/2-fp.OD/4
@@ -999,6 +1000,195 @@ class Tee(pypeType):
                       FreeCAD.Vector(0, 0, 1), 
                       FreeCAD.Vector(0, 1, 0)]
         super(Tee, self).execute(fp)  # perform common operations
+
+class SocketTee(pypeType):
+    """
+    SocketTee(obj, [PSize="DN25", PSizeBranch="DN25", OD=33.4, OD2=33.4,
+                    A=35.0, C=5.0, D=25.4, E=22.0, G=4.55, Conn="SW"])
+      obj           : the "App::FeaturePython" object
+      PSize         (string): nominal diameter of the run
+      PSizeBranch   (string): nominal diameter of the branch
+      OD            (float):  run pipe outside diameter
+      OD2           (float):  branch pipe outside diameter
+      A             (float):  dimension from fitting centre to outer face of socket
+      C             (float):  socket boss wall thickness
+      D             (float):  bore internal diameter (run, at centre)
+      E             (float):  dimension from fitting centre to base of socket
+      G             (float):  inner body wall thickness
+      Conn          (string): connection type (SW=Socket Weld, TH=Threaded)
+
+    Local coordinate system
+    ───────────────────────
+      Run axis   : Z  — ports 0 (-Z end) and 1 (+Z end)
+      Branch axis: Y  — port 2 (+Y end)
+      Origin     : centre of the tee body
+    """
+
+    def __init__(self, obj,
+                 PSize="DN25", PSizeBranch="DN25",
+                 OD=33.4, OD2=33.4,
+                 A=35.0, C=5.0, D=25.4, E=22.0, G=4.55,
+                 Conn="SW"):
+        # ── parent class ─────────────────────────────────────────────────────
+        super(SocketTee, self).__init__(obj)
+
+        # ── common pype properties ────────────────────────────────────────────
+        obj.Proxy   = self
+        obj.PType   = "SocketTee"
+        obj.PRating = "3000lb"
+        obj.PSize   = PSize
+
+        # ── specific properties ───────────────────────────────────────────────
+        obj.addProperty(
+            "App::PropertyString",
+            "PSizeBranch",
+            "SocketTee",
+            QT_TRANSLATE_NOOP("App::Property", "Nominal diameter of branch"),
+        ).PSizeBranch = PSizeBranch
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "OD",
+            "SocketTee",
+            QT_TRANSLATE_NOOP("App::Property", "Run pipe OD"),
+        ).OD = OD
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "OD2",
+            "SocketTee",
+            QT_TRANSLATE_NOOP("App::Property", "Branch pipe OD"),
+        ).OD2 = OD2
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "A",
+            "SocketTee",
+            QT_TRANSLATE_NOOP("App::Property", "Center to outer face of socket"),
+        ).A = A
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "C",
+            "SocketTee",
+            QT_TRANSLATE_NOOP("App::Property", "Socket wall thickness"),
+        ).C = C
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "D",
+            "SocketTee",
+            QT_TRANSLATE_NOOP("App::Property", "Bore internal diameter"),
+        ).D = D
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "E",
+            "SocketTee",
+            QT_TRANSLATE_NOOP("App::Property", "Center to base of socket"),
+        ).E = E
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "G",
+            "SocketTee",
+            QT_TRANSLATE_NOOP("App::Property", "Inner body wall thickness"),
+        ).G = G
+
+        obj.addProperty(
+            "App::PropertyString",
+            "Conn",
+            "SocketTee",
+            QT_TRANSLATE_NOOP("App::Property",
+                              "Connection type (SW=Socket Weld, TH=Threaded)"),
+        ).Conn = Conn
+
+        self.execute(obj)
+
+    def onChanged(self, fp, prop):
+        return None
+
+    def execute(self, fp):
+        # ── outer body ───────────────────────────────────────────────────────
+        centerBodyRadius = fp.D / 2 + fp.G
+
+        # Run body: cylinder spanning -E to +E along Z
+        base = Part.makeCylinder(
+            centerBodyRadius, float(fp.E) * 2,
+            FreeCAD.Vector(0, 0, -float(fp.E)), FreeCAD.Vector(0, 0, 1))
+
+        # Branch body: cylinder from centre outward along +Y
+        branchTube = Part.makeCylinder(
+            centerBodyRadius, float(fp.E),
+            FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 1, 0))
+
+        # Socket — all OD2
+        socket1 = Part.makeCylinder(
+            float(fp.OD) / 2 + float(fp.C), float(fp.A) - (float(fp.E) - float(fp.C)),
+            FreeCAD.Vector(0, 0,  float(fp.E) - float(fp.C)), FreeCAD.Vector(0, 0,  1))
+        socket2 = Part.makeCylinder(
+            float(fp.OD) / 2 + float(fp.C), float(fp.A) - (float(fp.E) - float(fp.C)),
+            FreeCAD.Vector(0, 0, -(float(fp.E) - float(fp.C))), FreeCAD.Vector(0, 0, -1))
+        socket3 = Part.makeCylinder(
+            float(fp.OD) / 2 + float(fp.C), float(fp.A) - (float(fp.E) - float(fp.C)),
+            FreeCAD.Vector(0, float(fp.E) - float(fp.C), 0), FreeCAD.Vector(0, 1, 0)) #branch
+
+        base = base.fuse(branchTube)
+        base = base.fuse(socket1)
+        base = base.fuse(socket2)
+        base = base.fuse(socket3)
+
+        # ── inner bore cutout ────────────────────────────────────────────────
+        boreRadius = fp.D / 2
+
+        cutout = Part.makeCylinder(
+            boreRadius, float(fp.E) * 2,
+            FreeCAD.Vector(0, 0, -float(fp.E)), FreeCAD.Vector(0, 0, 1))
+        #For reducing tee, branch bore radius is OD of branch pipe minus 3 mm for socket lip. Worthwhile to pass this or just keep hard coded?
+        if fp.OD == fp.OD2:
+            branchBore = Part.makeCylinder(
+                boreRadius, float(fp.E),
+                FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 1, 0))
+
+        else:
+            branchBore = Part.makeCylinder(
+                float(fp.OD2)/2-3.0, float(fp.E),
+                FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 1, 0))
+
+        # Socket bores — run ports use OD/2, branch port uses OD2/2
+        cut1 = Part.makeCylinder(
+            float(fp.OD) / 2, float(fp.A) - (float(fp.E) - float(fp.C)),
+            FreeCAD.Vector(0, 0,  float(fp.E)), FreeCAD.Vector(0, 0,  1))
+        cut2 = Part.makeCylinder(
+            float(fp.OD) / 2, float(fp.A) - (float(fp.E) - float(fp.C)),
+            FreeCAD.Vector(0, 0, -float(fp.E)), FreeCAD.Vector(0, 0, -1))
+        cut3 = Part.makeCylinder(
+            float(fp.OD2) / 2, float(fp.A) - (float(fp.E) - float(fp.C)),
+            FreeCAD.Vector(0, float(fp.E), 0), FreeCAD.Vector(0, 1, 0))
+
+        cutout = cutout.fuse(branchBore)
+        cutout = cutout.fuse(cut1)
+        cutout = cutout.fuse(cut2)
+        cutout = cutout.fuse(cut3)
+
+        base = base.cut(cutout)
+        fp.Shape = base
+
+        # ── ports ─────────────────────────────────────────────────────────────
+        # Port 0: run end at -Z  (primary insertion port, outward direction -Z)
+        # Port 1: run end at +Z  (outward direction +Z)
+        # Port 2: branch at +Y   (outward direction +Y)
+        fp.Ports = [
+            FreeCAD.Vector(0, 0, -float(fp.E)),
+            FreeCAD.Vector(0, 0,  float(fp.E)),
+            FreeCAD.Vector(0,  float(fp.E), 0),
+        ]
+        fp.PortDirections = [
+            FreeCAD.Vector(0, 0, -1),
+            FreeCAD.Vector(0, 0,  1),
+            FreeCAD.Vector(0,  1,  0),
+        ]
+        super(SocketTee, self).execute(fp)  # perform common operations
 
     
 class Reduct(pypeType):
@@ -1961,7 +2151,7 @@ class Outlet(pypeType):
         obj.addProperty(
             "App::PropertyLength", "E", "Outlet",
             QT_TRANSLATE_NOOP("App::Property",
-                "Socket depth – bore steps from ID to OD at this height "
+                "Socket depth  bore steps from ID to OD at this height "
                 "(SocketWeld only)"),
         ).E = E if E else 0.0
 

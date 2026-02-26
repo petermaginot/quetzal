@@ -635,7 +635,7 @@ def makeElbow(propList=[], pos=None, Z=None):
     else:
         pFeatures.Elbow(a)
     ViewProvider(a.ViewObject, "Quetzal_InsertElbow")
-
+    
     # Rotate so port[0]'s local direction faces Z.
     # SocketEll port[0] direction is (1,0,0) — local +X, not +Z — so the
     # reference axis must be port[0]'s actual local direction, not (0,0,1).
@@ -647,6 +647,7 @@ def makeElbow(propList=[], pos=None, Z=None):
     port0_world = a.Placement.multVec(a.Ports[0])
     a.Placement.Base = pos - port0_world
     a.Label = translate("Objects", "Elbow")
+    return a
 
 
 def makeElbowBetweenThings(thing1=None, thing2=None, propList=None):
@@ -2742,3 +2743,110 @@ def doSocketElbow(propList=["DN25", 33.4, 90, 35.0, 5.0, 25.4, 22.0, 5.455, "SW"
     FreeCAD.activeDocument().commitTransaction()
     FreeCAD.activeDocument().recompute()
     return elist
+
+
+def makeSocketTee(propList=[], pos=None, Z=None, insertOnBranch=False):
+    """Adds a SocketTee object.
+    makeSocketTee(propList, pos, Z, insertOnBranch)
+      propList is one optional list with 10 elements:
+        PSize       (string): nominal diameter of run
+        PSizeBranch (string): nominal diameter of branch
+        OD          (float):  run pipe outside diameter
+        OD2         (float):  branch pipe outside diameter
+        A           (float):  centre to outer face of socket
+        C           (float):  socket boss wall thickness
+        D           (float):  bore internal diameter
+        E           (float):  centre to base of socket
+        G           (float):  inner body wall thickness
+        Conn        (string): connection type ("SW" or "TH")
+      pos (vector): world position of the insertion port; default = 0,0,0
+      Z   (vector): desired outward direction of the insertion port; default = 0,0,1
+      insertOnBranch (bool): if True use port[2] (+Y branch) as insertion port;
+                             otherwise use port[0] (-Z run end).
+    Remember: property PRating must be defined afterwards.
+    """
+    if pos is None:
+        pos = FreeCAD.Vector(0, 0, 0)
+    if Z is None:
+        Z = FreeCAD.Vector(0, 0, 1)
+    a = FreeCAD.ActiveDocument.addObject("Part::FeaturePython", "SocketTee")
+    if len(propList) == 10:
+        pFeatures.SocketTee(a, *propList)
+    else:
+        pFeatures.SocketTee(a)
+    ViewProvider(a.ViewObject, "Quetzal_InsertTee")
+
+    # Choose the insertion port and read its local direction from the object.
+    # port[0] direction = (0, 0, -1)  — run end at -Z
+    # port[2] direction = (0,  1,  0) — branch end at +Y
+    insertion_port = 2 if insertOnBranch else 0
+    port_local_dir = a.PortDirections[insertion_port] if a.PortDirections else FreeCAD.Vector(0, 0, 1)
+
+    # Rotate so the insertion port's local direction faces Z.
+    rot = FreeCAD.Rotation(port_local_dir, Z)
+    a.Placement.Rotation = rot.multiply(a.Placement.Rotation)
+
+    # Translate so the insertion port lands exactly at pos.
+    port_world = a.Placement.multVec(a.Ports[insertion_port])
+    a.Placement.Base = pos - port_world
+
+    a.Label = translate("Objects", "SocketTee")
+    return a
+
+
+def doSocketTee(propList=["DN25", "DN25", 33.4, 33.4, 35.0, 5.0, 25.4, 22.0, 5.455, "SW"],
+                pypeline=None, insertOnBranch=False):
+    """
+    Insert a SocketTee fitting, aligning it to the selected port when possible.
+
+    propList = [
+      PSize       (string): nominal diameter of run
+      PSizeBranch (string): nominal diameter of branch
+      OD          (float):  run pipe outside diameter
+      OD2         (float):  branch pipe outside diameter
+      A           (float):  centre to outer face of socket
+      C           (float):  socket boss wall thickness
+      D           (float):  bore internal diameter
+      E           (float):  centre to base of socket
+      G           (float):  inner body wall thickness
+      Conn        (string): connection type ("SW" or "TH") ]
+    pypeline       = string (optional PypeLine label)
+    insertOnBranch = bool   (True → insert/align on the branch port)
+
+    Behaviour:
+      - No selection          → insert at origin.
+      - Ported object selected → align the insertion port to the selected port
+                                  via alignTwoPorts.
+      - Non-ported geometry   → insert with insertion port direction matching
+                                  the selected face normal / edge tangent.
+    """
+    insertion_port = 2 if insertOnBranch else 0
+    FreeCAD.activeDocument().openTransaction(translate("Transaction", "Insert socket tee"))
+    plist = []
+    try:
+        selex = FreeCADGui.Selection.getSelectionEx()[0]
+        usablePorts = False
+        if hasattr(selex.Object, "Ports"):
+            if hasattr(selex.Object, "PType"):
+                if selex.Object.PType != "Any":
+                    usablePorts = True
+
+        pos, Z, srcObj, srcPort = getAttachmentPoints()
+        if usablePorts:
+            tee = makeSocketTee(propList, pos, Z, insertOnBranch)
+            plist.append(tee)
+            FreeCAD.activeDocument().commitTransaction()
+            FreeCAD.activeDocument().recompute()
+            alignTwoPorts(tee, insertion_port, srcObj, srcPort)
+        else:
+            plist.append(makeSocketTee(propList, pos, Z, insertOnBranch))
+    except Exception:
+        # Nothing selected — insert at origin.
+        plist.append(makeSocketTee(propList, insertOnBranch=insertOnBranch))
+
+    if pypeline:
+        for t in plist:
+            moveToPyLi(t, pypeline)
+    FreeCAD.activeDocument().commitTransaction()
+    FreeCAD.activeDocument().recompute()
+    return plist
