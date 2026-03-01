@@ -2364,3 +2364,304 @@ class SocketCap(pypeType):
         fp.Ports = [ FreeCAD.Vector(0,0, 0)]
         fp.PortDirections = [FreeCAD.Vector(0,0,-1)]
         super(SocketCap, self).execute(fp)  # perform common operations
+
+class SocketCoupling(pypeType):
+    """
+    SocketCoupling(obj, [PSize="DN25", PSize2="DN25", OD=33.4, OD2=33.4,
+                         A=35.0, C=5.0, D=25.9, E=22.0, Conn="SW"])
+      obj     : the "App::FeaturePython" object
+      PSize   (string): nominal diameter of port 0 (run end, -Z)
+      PSize2  (string): nominal diameter of port 1 (opposite end, +Z)
+      OD      (float):  port 0 pipe outside diameter
+      OD2     (float):  port 1 pipe outside diameter
+      A       (float):  half-length of coupling (center to outer edge)
+      C       (float):  socket boss wall thickness (port 0 end)
+      D       (float):  bore diameter at centre of fitting
+      E       (float):  socket depth (pipe insertion depth)
+      Conn    (string): connection type (SW=Socket Weld, TH=Threaded)
+
+    Local coordinate system
+    ───────────────────────
+      Axis  : Z
+      Port 0: at z = -(A-E), outward direction -Z  (port 0 pipe end)
+      Port 1: at z = +(A-E), outward direction +Z  (port 1 pipe end)
+      Origin: centre of the coupling body
+    """
+
+    def __init__(self, obj,
+                 PSize="DN25", PSize2="DN25",
+                 OD=33.4, OD2=33.4,
+                 A=35.0, C=5.0, D=25.9, E=22.0,
+                 Conn="SW"):
+        # ── parent class ─────────────────────────────────────────────────────
+        super(SocketCoupling, self).__init__(obj)
+
+        # ── common pype properties ────────────────────────────────────────────
+        obj.Proxy   = self
+        obj.PType   = "SocketCoupling"
+        obj.PRating = "3000lb"
+        obj.PSize   = PSize
+
+        # ── specific properties ───────────────────────────────────────────────
+        obj.addProperty(
+            "App::PropertyString",
+            "PSize2",
+            "SocketCoupling",
+            QT_TRANSLATE_NOOP("App::Property", "Nominal diameter of port 1"),
+        ).PSize2 = PSize2
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "OD",
+            "SocketCoupling",
+            QT_TRANSLATE_NOOP("App::Property", "Port 0 pipe OD"),
+        ).OD = OD
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "OD2",
+            "SocketCoupling",
+            QT_TRANSLATE_NOOP("App::Property", "Port 1 pipe OD"),
+        ).OD2 = OD2
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "A",
+            "SocketCoupling",
+            QT_TRANSLATE_NOOP("App::Property", "Half-length (center to outer edge)"),
+        ).A = A
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "C",
+            "SocketCoupling",
+            QT_TRANSLATE_NOOP("App::Property", "Socket boss wall thickness"),
+        ).C = C
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "D",
+            "SocketCoupling",
+            QT_TRANSLATE_NOOP("App::Property", "Bore diameter at centre"),
+        ).D = D
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "E",
+            "SocketCoupling",
+            QT_TRANSLATE_NOOP("App::Property", "Socket depth"),
+        ).E = E
+
+        obj.addProperty(
+            "App::PropertyString",
+            "Conn",
+            "SocketCoupling",
+            QT_TRANSLATE_NOOP("App::Property",
+                              "Connection type (SW=Socket Weld, TH=Threaded)"),
+        ).Conn = Conn
+
+        self.execute(obj)
+
+    def onChanged(self, fp, prop):
+        return None
+
+    def execute(self, fp):
+        OD  = float(fp.OD)
+        OD2 = float(fp.OD2)
+        A   = float(fp.A)
+        C   = float(fp.C)
+        D   = float(fp.D)
+        E   = float(fp.E)
+
+        # ── outer body ────────────────────────────────────────────────────────
+        # Main cylinder: full length, outer radius = OD/2 + C
+        base = Part.makeCylinder(
+            OD / 2 + C, A * 2,
+            FreeCAD.Vector(0, 0, -A), FreeCAD.Vector(0, 0, 1))
+
+        # ── internal cutouts ──────────────────────────────────────────────────
+        # Central bore (D is bore diameter, so radius = D/2. 
+        # If a reducing coupling is used, the center bore may need to be narrower than the default (maximum 6 mm narrower than OD2))
+        D = min(D, OD2 - 6.0)
+        bore = Part.makeCylinder(
+            D / 2, A * 2,
+            FreeCAD.Vector(0, 0, -A), FreeCAD.Vector(0, 0, 1))
+
+        # Socket 0: pipe OD/2 socket pocket opening from the -Z face, depth E
+        socket1 = Part.makeCylinder(
+            OD / 2, E,
+            FreeCAD.Vector(0, 0, -A), FreeCAD.Vector(0, 0, 1))
+
+        # Socket 1: pipe OD2/2 socket pocket opening from the +Z face, depth E
+        socket2 = Part.makeCylinder(
+            OD2 / 2, E,
+            FreeCAD.Vector(0, 0, A), FreeCAD.Vector(0, 0, -1))
+
+        base = base.cut(bore)
+        base = base.cut(socket1)
+        base = base.cut(socket2)
+
+        fp.Shape = base
+
+        # ── ports ─────────────────────────────────────────────────────────────
+        # Ports sit at the bottom of each socket pocket (where the pipe end rests)
+        fp.Ports = [
+            FreeCAD.Vector(0, 0, -A + E),   # port 0: inside socket 0
+            FreeCAD.Vector(0, 0,  A - E),   # port 1: inside socket 1
+        ]
+        fp.PortDirections = [
+            FreeCAD.Vector(0, 0, -1),        # port 0 outward: -Z
+            FreeCAD.Vector(0, 0,  1),        # port 1 outward: +Z
+        ]
+        super(SocketCoupling, self).execute(fp)  # perform common operations
+
+
+class SocketUnion(pypeType):
+    """
+    SocketUnion(obj, [PSize="DN25", OD=33.4, A=35.0, C=5.0, D=25.9, E=22.0, Conn="SW"])
+      obj   : the "App::FeaturePython" object
+      PSize (string): nominal diameter (both ports identical)
+      OD    (float):  pipe outside diameter
+      A     (float):  half-length (center to outer edge of assembled union)
+      C     (float):  socket boss wall thickness
+      D     (float):  bore diameter
+      E     (float):  socket depth
+      Conn  (string): connection type (SW=Socket Weld, TH=Threaded)
+
+    Local coordinate system
+    ───────────────────────
+      Axis  : Z
+      Port 0: at z = -(A-E), outward direction -Z
+      Port 1: at z = +(A-E), outward direction +Z
+      Origin: center of the union body
+    """
+
+    def __init__(self, obj,
+                 PSize="DN25", OD=33.4, A=35.0, C=5.0, D=25.9, E=22.0,
+                 Conn="SW"):
+        # ── parent class ─────────────────────────────────────────────────────
+        super(SocketUnion, self).__init__(obj)
+
+        # ── common pype properties ────────────────────────────────────────────
+        obj.Proxy   = self
+        obj.PType   = "SocketUnion"
+        obj.PRating = "3000lb"
+        obj.PSize   = PSize
+
+        # ── specific properties ───────────────────────────────────────────────
+        obj.addProperty(
+            "App::PropertyLength",
+            "OD",
+            "SocketUnion",
+            QT_TRANSLATE_NOOP("App::Property", "Pipe OD"),
+        ).OD = OD
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "A",
+            "SocketUnion",
+            QT_TRANSLATE_NOOP("App::Property", "Half-length (centre to outer edge)"),
+        ).A = A
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "C",
+            "SocketUnion",
+            QT_TRANSLATE_NOOP("App::Property", "Socket boss wall thickness"),
+        ).C = C
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "D",
+            "SocketUnion",
+            QT_TRANSLATE_NOOP("App::Property", "Bore diameter"),
+        ).D = D
+
+        obj.addProperty(
+            "App::PropertyLength",
+            "E",
+            "SocketUnion",
+            QT_TRANSLATE_NOOP("App::Property", "Socket depth"),
+        ).E = E
+
+        obj.addProperty(
+            "App::PropertyString",
+            "Conn",
+            "SocketUnion",
+            QT_TRANSLATE_NOOP("App::Property",
+                              "Connection type (SW=Socket Weld, TH=Threaded)"),
+        ).Conn = Conn
+
+        self.execute(obj)
+
+    def onChanged(self, fp, prop):
+        return None
+
+    def execute(self, fp):
+        OD  = float(fp.OD)
+        A   = float(fp.A)
+        C   = float(fp.C)
+        D   = float(fp.D)
+        E   = float(fp.E)
+
+        bossR = OD / 2 + C   # outer radius of body / socket boss
+
+        # ── outer body ────────────────────────────────────────────────────────
+        # Plain cylinder base (same shape as coupling)
+        base = Part.makeCylinder(
+            bossR, A * 2,
+            FreeCAD.Vector(0, 0, -A), FreeCAD.Vector(0, 0, 1))
+
+        # Octagonal center collar — a regular 8-sided prism in the XY plane,
+        # circumradius = bossR * 1.5, height = A*2/3, centred at z=0.
+        octR   = bossR * 1.5
+        octH   = A * 2 / 3
+        import math
+        n = 8
+        pts = []
+        for i in range(n):
+            angle = math.radians(i * 360.0 / n)
+            pts.append(FreeCAD.Vector(octR * math.cos(angle),
+                                      octR * math.sin(angle), 0))
+        # Close the polygon
+        pts.append(pts[0])
+        poly  = Part.makePolygon(pts)
+        face  = Part.Face(poly)
+        # Extrude symmetrically ±octH/2 about z=0
+        octSolid = face.extrude(FreeCAD.Vector(0, 0, octH))
+        octSolid.translate(FreeCAD.Vector(0, 0, -octH / 2))
+
+        base = base.fuse(octSolid)
+
+        # ── internal cutouts ──────────────────────────────────────────────────
+        # Central bore (D is bore diameter, radius = D/2)
+        bore = Part.makeCylinder(
+            D / 2, A * 2,
+            FreeCAD.Vector(0, 0, -A), FreeCAD.Vector(0, 0, 1))
+
+        # Socket 0: opens from -Z face, depth E
+        socket1 = Part.makeCylinder(
+            OD / 2, E,
+            FreeCAD.Vector(0, 0, -A), FreeCAD.Vector(0, 0, 1))
+
+        # Socket 1: opens from +Z face, depth E
+        socket2 = Part.makeCylinder(
+            OD / 2, E,
+            FreeCAD.Vector(0, 0, A), FreeCAD.Vector(0, 0, -1))
+
+        base = base.cut(bore)
+        base = base.cut(socket1)
+        base = base.cut(socket2)
+
+        fp.Shape = base
+
+        # ── ports ─────────────────────────────────────────────────────────────
+        fp.Ports = [
+            FreeCAD.Vector(0, 0, -A + E),
+            FreeCAD.Vector(0, 0,  A - E),
+        ]
+        fp.PortDirections = [
+            FreeCAD.Vector(0, 0, -1),
+            FreeCAD.Vector(0, 0,  1),
+        ]
+        super(SocketUnion, self).execute(fp)  # perform common operations

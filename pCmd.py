@@ -2939,3 +2939,167 @@ def doSocketCap(propList=["DN25", 33.4, 26.0, 5.0, 13.0, "SW"],
     FreeCAD.activeDocument().commitTransaction()
     FreeCAD.activeDocument().recompute()
     return plist
+
+def _makeSocketStraight(fcClass, label, iconName, propList, expectedLen,
+                        pos=None, Z=None):
+    """Create a two-port, straight-axis socket fitting (coupling or union),
+    rotate so port[0]'s outward direction faces Z, then translate so port[0]
+    lands at pos.
+
+    This is an internal helper called by makeSocketCoupling and makeSocketUnion.
+    """
+    if pos is None:
+        pos = FreeCAD.Vector(0, 0, 0)
+    if Z is None:
+        Z = FreeCAD.Vector(0, 0, 1)
+
+    a = FreeCAD.ActiveDocument.addObject("Part::FeaturePython", label)
+    if len(propList) == expectedLen:
+        fcClass(a, *propList)
+    else:
+        fcClass(a)
+    ViewProvider(a.ViewObject, iconName)
+
+    # port[0] local direction is (0,0,-1); rotate so it aligns with Z.
+    port0_local_dir = a.PortDirections[0] if a.PortDirections else FreeCAD.Vector(0, 0, 1)
+    rot = FreeCAD.Rotation(port0_local_dir, Z)
+    a.Placement.Rotation = rot.multiply(a.Placement.Rotation)
+
+    # Translate so port[0] lands exactly at pos.
+    port0_world = a.Placement.multVec(a.Ports[0])
+    a.Placement.Base = pos - port0_world
+
+    a.Label = translate("Objects", label)
+    return a
+
+
+def _doSocketStraight(makeFn, transactionLabel, propList, pypeline=None):
+    """Insert a socket coupling or union, aligning to the selected port when
+    possible.  Internal helper shared by doSocketCoupling and doSocketUnion.
+    """
+    FreeCAD.activeDocument().openTransaction(
+        translate("Transaction", transactionLabel))
+    plist = []
+    try:
+        selex = FreeCADGui.Selection.getSelectionEx()[0]
+        usablePorts = False
+        if hasattr(selex.Object, "Ports"):
+            if hasattr(selex.Object, "PType"):
+                if selex.Object.PType != "Any":
+                    usablePorts = True
+
+        pos, Z, srcObj, srcPort = getAttachmentPoints()
+        if usablePorts:
+            fitting = makeFn(propList, pos, Z)
+            plist.append(fitting)
+            FreeCAD.activeDocument().commitTransaction()
+            FreeCAD.activeDocument().recompute()
+            alignTwoPorts(fitting, 0, srcObj, srcPort)
+        else:
+            plist.append(makeFn(propList, pos, Z))
+    except Exception:
+        # Nothing selected — insert at origin.
+        plist.append(makeFn(propList))
+
+    if pypeline:
+        for t in plist:
+            moveToPyLi(t, pypeline)
+    FreeCAD.activeDocument().commitTransaction()
+    FreeCAD.activeDocument().recompute()
+    return plist
+
+
+# ── public API: SocketCoupling ────────────────────────────────────────────────
+
+def makeSocketCoupling(propList=[], pos=None, Z=None):
+    """Add a SocketCoupling object.
+    makeSocketCoupling(propList, pos, Z)
+      propList is one optional list with 9 elements:
+        PSize  (string): nominal diameter of port 0
+        PSize2 (string): nominal diameter of port 1
+        OD     (float):  port 0 pipe outside diameter
+        OD2    (float):  port 1 pipe outside diameter
+        A      (float):  half-length (centre to outer edge)
+        C      (float):  socket boss wall thickness
+        D      (float):  bore diameter at centre
+        E      (float):  socket depth
+        Conn   (string): connection type ("SW" or "TH")
+      pos (vector): world position of port[0]; default = 0,0,0
+      Z   (vector): desired outward direction of port[0]; default = 0,0,1
+    Remember: property PRating must be defined afterwards.
+    """
+    return _makeSocketStraight(
+        pFeatures.SocketCoupling, "SocketCoupling",
+        "Quetzal_InsertCoupling", propList, 9, pos, Z)
+
+
+def doSocketCoupling(propList=["DN25", "DN25", 33.4, 33.4, 35.0, 5.0, 25.9, 22.0, "SW"],
+                     pypeline=None):
+    """Insert a SocketCoupling fitting, aligning it to the selected port when possible.
+
+    propList = [
+      PSize  (string): nominal diameter of port 0
+      PSize2 (string): nominal diameter of port 1
+      OD     (float):  port 0 pipe outside diameter
+      OD2    (float):  port 1 pipe outside diameter
+      A      (float):  half-length (centre to outer edge)
+      C      (float):  socket boss wall thickness
+      D      (float):  bore diameter at centre
+      E      (float):  socket depth
+      Conn   (string): connection type ("SW" or "TH") ]
+    pypeline = string (optional PypeLine label)
+
+    Behaviour:
+      - No selection          → insert at origin.
+      - Ported object selected → align port[0] to the selected port.
+      - Non-ported geometry   → insert with port[0] direction matching
+                                 face normal / edge tangent.
+    """
+    return _doSocketStraight(
+        makeSocketCoupling, "Insert socket coupling", propList, pypeline)
+
+
+# ── public API: SocketUnion ───────────────────────────────────────────────────
+
+def makeSocketUnion(propList=[], pos=None, Z=None):
+    """Add a SocketUnion object.
+    makeSocketUnion(propList, pos, Z)
+      propList is one optional list with 7 elements:
+        PSize (string): nominal diameter
+        OD    (float):  pipe outside diameter
+        A     (float):  half-length (centre to outer edge)
+        C     (float):  socket boss wall thickness
+        D     (float):  bore diameter
+        E     (float):  socket depth
+        Conn  (string): connection type ("SW" or "TH")
+      pos (vector): world position of port[0]; default = 0,0,0
+      Z   (vector): desired outward direction of port[0]; default = 0,0,1
+    Remember: property PRating must be defined afterwards.
+    """
+    return _makeSocketStraight(
+        pFeatures.SocketUnion, "SocketUnion",
+        "Quetzal_InsertCoupling", propList, 7, pos, Z)
+
+
+def doSocketUnion(propList=["DN25", 33.4, 35.0, 5.0, 25.9, 22.0, "SW"],
+                  pypeline=None):
+    """Insert a SocketUnion fitting, aligning it to the selected port when possible.
+
+    propList = [
+      PSize (string): nominal diameter
+      OD    (float):  pipe outside diameter
+      A     (float):  half-length (centre to outer edge)
+      C     (float):  socket boss wall thickness
+      D     (float):  bore diameter
+      E     (float):  socket depth
+      Conn  (string): connection type ("SW" or "TH") ]
+    pypeline = string (optional PypeLine label)
+
+    Behaviour:
+      - No selection          → insert at origin.
+      - Ported object selected → align port[0] to the selected port.
+      - Non-ported geometry   → insert with port[0] direction matching
+                                 face normal / edge tangent.
+    """
+    return _doSocketStraight(
+        makeSocketUnion, "Insert socket union", propList, pypeline)

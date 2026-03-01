@@ -254,6 +254,30 @@ class insertBranch:
             "ToolTip": QT_TRANSLATE_NOOP("Quetzal_InsertBranch", "Insert a PypeBranch"),
         }
 
+class _InsertCouplingUnionCmd:
+    """FreeCAD Gui command — opens the coupling/union insertion dialog."""
+
+    def GetResources(self):
+        # Re-use the generic fitting icon; replace with a dedicated one if available.
+        from quetzal_config import ICONPATH
+        return {
+            "Pixmap":  "fitting.svg",
+            "MenuText": QT_TRANSLATE_NOOP("Quetzal", "Insert Coupling / Union"),
+            "ToolTip":  QT_TRANSLATE_NOOP(
+                "Quetzal",
+                "Insert a socket-weld or threaded coupling or union fitting"),
+            "Accel":    "",
+        }
+
+    def IsActive(self):
+        return FreeCAD.activeDocument() is not None
+
+    def Activated(self):
+        import pForms
+        pForms.insertCouplingUnionForm()
+
+
+
 
 class breakPipe:
     def IsActive(self):
@@ -693,6 +717,7 @@ addCommand("Quetzal_InsertTee", insertTee())
 addCommand("Quetzal_InsertValve", insertValve())
 addCommand("Quetzal_InsertFlange", insertFlange())
 addCommand("Quetzal_InsertGasket", insertGasket())
+addCommand("Quetzal_InsertCoupling", _InsertCouplingUnionCmd())
 addCommand("Quetzal_InsertUBolt", insertUbolt())
 addCommand("Quetzal_InsertPypeLine", insertPypeLine())
 addCommand("Quetzal_InsertBranch", insertBranch())

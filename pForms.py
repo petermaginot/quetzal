@@ -839,9 +839,7 @@ class insertTerminalAdapterForm(dodoDialogs.protoPypeForm):
       - one straight edge
       - one vertex
       - nothing (created at origin)
-    In case one pipe is selected, its properties are applied to the reduction.
-    Available one button to reverse the orientation of the last or selected
-    reductions.
+    In case one pipe is selected, its properties are applied
     """
 
     def __init__(self):
@@ -849,7 +847,7 @@ class insertTerminalAdapterForm(dodoDialogs.protoPypeForm):
             translate("insertTerminalAdapter", "Insert terminal adapter"),
             "TerminalAdapter",
             "ConduitPVC0.5in-SCH-40",
-            "reduct.svg",
+            "TA.svg",
             x,
             y,
         )
@@ -857,9 +855,9 @@ class insertTerminalAdapterForm(dodoDialogs.protoPypeForm):
         self.ratingList.setCurrentRow(0)
         self.ratingList.itemClicked.connect(self.changeRating2)
         self.ratingList.setMaximumHeight(50)
-        self.btn2 = QPushButton(translate("insertReductForm", "Reverse"))
+        self.btn2 = QPushButton(translate("insertTerminalAdapterForm", "Reverse"))
         self.secondCol.layout().addWidget(self.btn2)
-        self.btn3 = QPushButton(translate("insertReductForm", "Apply"))
+        self.btn3 = QPushButton(translate("insertTerminalAdapterFormForm", "Apply"))
         self.secondCol.layout().addWidget(self.btn3)
         self.btn1.clicked.connect(self.insert)
         self.btn2.clicked.connect(self.reverse)
@@ -867,7 +865,7 @@ class insertTerminalAdapterForm(dodoDialogs.protoPypeForm):
         self.btn1.setDefault(True)
         self.btn1.setFocus()
         self.show()
-        self.lastReduct = None
+        self.lastTA = None
 
     def applyProp(self):
         r = self.pipeDictList[self.sizeList.currentRow()]
@@ -881,28 +879,28 @@ class insertTerminalAdapterForm(dodoDialogs.protoPypeForm):
         except:
             thk2 = thk1
         H = pq(r["H"])
-        reductions = [
+        terminalAdapter = [
             red
             for red in FreeCADGui.Selection.getSelection()
-            if hasattr(red, "PType") and red.PType == "Reduct"
+            if hasattr(red, "PType") and red.PType == "TA"
         ]
-        if len(reductions):
-            for reduct in reductions:
-                reduct.PSize = DN
-                reduct.PRating = self.PRating
-                reduct.OD = OD1
-                reduct.OD2 = OD2
-                reduct.thk = thk1
-                reduct.thk2 = thk2
-                reduct.Height = H
-        elif self.lastReduct:
-            self.lastReduct.PSize = DN
-            self.lastReduct.PRating = self.PRating
-            self.lastReduct.OD = OD1
-            self.lastReduct.OD2 = OD2
-            self.lastReduct.thk = thk1
-            self.lastReduct.thk2 = thk2
-            self.lastReduct.Height = H
+        if len(terminalAdapter):
+            for TA in terminalAdapter:
+                TA.PSize = DN
+                TA.PRating = self.PRating
+                TA.OD = OD1
+                TA.OD2 = OD2
+                TA.thk = thk1
+                TA.thk2 = thk2
+                TA.Height = H
+        elif self.lastTA:
+            self.lastTA.PSize = DN
+            self.lastTA.PRating = self.PRating
+            self.lastTA.OD = OD1
+            self.lastTA.OD2 = OD2
+            self.lastTA.thk = thk1
+            self.lastTA.thk2 = thk2
+            self.lastTA.Height = H
         FreeCAD.activeDocument().recompute()
 
     def reverse(self):
@@ -914,8 +912,8 @@ class insertTerminalAdapterForm(dodoDialogs.protoPypeForm):
         if len(selRed):
             for r in selRed:
                 pCmd.rotateTheTubeAx(r, FreeCAD.Vector(1, 0, 0), 180)
-        elif self.lastReduct:
-            pCmd.rotateTheTubeAx(self.lastReduct, FreeCAD.Vector(1, 0, 0), 180)
+        elif self.lastTA:
+            pCmd.rotateTheTubeAx(self.lastTA, FreeCAD.Vector(1, 0, 0), 180)
 
     def insert(self):
         size = self.pipeDictList[self.sizeList.currentRow()]
@@ -966,12 +964,12 @@ class insertTerminalAdapterForm(dodoDialogs.protoPypeForm):
                     Z = edge.tangentAt(0)
             elif selex and selex[0].SubObjects[0].ShapeType == "Vertex":  # ...or 1 vertex..
                 pos = selex[0].SubObjects[0].Point
-        FreeCAD.activeDocument().openTransaction(translate("Transaction", "Insert reduction"))
-        self.lastReduct = pCmd.makeTerminalAdapter(rating,propList, pos, Z)
+        FreeCAD.activeDocument().openTransaction(translate("Transaction", "Insert terminal adapter"))
+        self.lastTA = pCmd.makeTerminalAdapter(rating,propList, pos, Z)
         FreeCAD.activeDocument().commitTransaction()
         FreeCAD.activeDocument().recompute()
         if self.combo.currentText() != "<none>":
-            pCmd.moveToPyLi(self.lastReduct, self.combo.currentText())
+            pCmd.moveToPyLi(self.lastTA, self.combo.currentText())
 
     def changeRating2(self, item):
         self.PRating = item.text()
@@ -3376,3 +3374,288 @@ class insertOutletForm(dodoDialogs.protoPypeForm):
             obj.Angle   = propList[7]
             obj.E       = propList[8]
         FreeCAD.activeDocument().recompute()
+
+class insertCouplingUnionForm(dodoDialogs.protoPypeForm):
+    """
+    Dialog to insert a socket-weld coupling or union.
+
+    A radio-button pair at the top of the second column selects whether a
+    Coupling or a Union is being inserted.
+
+    Coupling mode
+    ─────────────
+      CSV: Coupling_<rating>.csv  columns: PSize;PSize2;OD;OD2;A;C;D;E;Conn
+      Primary sizeList  : unique PSize values  (port 0 nominal diameter)
+      Secondary portList: matching PSize2 rows for the selected PSize
+      Insert  → pCmd.doSocketCoupling (9-element propList)
+      Apply   → pushes properties onto selected SocketCoupling objects
+
+    Union mode
+    ──────────
+      CSV: Union_<rating>.csv  columns: PSize;OD;A;C;D;E;Conn  (no header row)
+      sizeList: all sizes; no second list needed
+      Insert  → pCmd.doSocketUnion (7-element propList)
+      Apply   → pushes properties onto selected SocketUnion objects
+    """
+
+    # Union CSV has no header — define fieldnames here so DictReader works.
+    _UNION_FIELDS = ["PSize", "OD", "A", "C", "D", "E", "Conn"]
+
+    def __init__(self):
+        # Initialise as a Coupling form (PType="Coupling" so the rating list
+        # scans for files named Coupling_*.csv).
+        super(insertCouplingUnionForm, self).__init__(
+            translate("insertCouplingUnionForm", "Insert coupling / union"),
+            "Coupling",
+            "3000lb_SW",
+            "fitting.svg",
+            x,
+            y,
+        )
+        self.sizeList.setCurrentRow(0)
+        self.ratingList.setCurrentRow(0)
+
+        # ── mode radio buttons ────────────────────────────────────────────────
+        self._modeGroup   = QButtonGroup()
+        self._couplingRad = QRadioButton(
+            translate("insertCouplingUnionForm", "Coupling"))
+        self._unionRad    = QRadioButton(
+            translate("insertCouplingUnionForm", "Union"))
+        self._couplingRad.setChecked(True)
+        self._modeGroup.addButton(self._couplingRad)
+        self._modeGroup.addButton(self._unionRad)
+        self.secondCol.layout().addWidget(self._couplingRad)
+        self.secondCol.layout().addWidget(self._unionRad)
+        self._couplingRad.toggled.connect(self._onModeChange)
+
+        # ── secondary port-2 size list (coupling only) ────────────────────────
+        self._port2DictList = []
+        self._port2Label    = QLabel(
+            translate("insertCouplingUnionForm", "Port 1 size:"))
+        self._port2List     = QListWidget()
+        self._port2List.setMaximumHeight(100)
+        self.secondCol.layout().addWidget(self._port2Label)
+        self.secondCol.layout().addWidget(self._port2List)
+
+        # ── buttons ───────────────────────────────────────────────────────────
+        self.btn1.clicked.connect(self.insert)
+        self._btnReverse = QPushButton(
+            translate("insertCouplingUnionForm", "Reverse"))
+        self.secondCol.layout().addWidget(self._btnReverse)
+        self._btnReverse.clicked.connect(self.reverse)
+        self._btnApply = QPushButton(
+            translate("insertCouplingUnionForm", "Apply"))
+        self.secondCol.layout().addWidget(self._btnApply)
+        self._btnApply.clicked.connect(self.apply)
+        self.btn1.setDefault(True)
+        self.btn1.setFocus()
+
+        # Rewire rating-change so fillSizes() is called correctly.
+        try:
+            self.ratingList.itemClicked.disconnect(self.changeRating)
+        except Exception:
+            pass
+        self.ratingList.itemClicked.connect(self._changeRating)
+
+        # Keep port-2 list in sync when primary selection changes.
+        self.sizeList.currentItemChanged.connect(self._fillPort2)
+
+        pCmd.autoSelectInPipeForm(self)
+
+        self.show()
+        self.lastFitting = None
+
+    # ── mode helpers ──────────────────────────────────────────────────────────
+
+    def _isCoupling(self):
+        return self._couplingRad.isChecked()
+
+    def _onModeChange(self):
+        """Called when the Coupling/Union radio button changes."""
+        is_coupling = self._isCoupling()
+        # Swap the PType so the rating scan picks up the right CSV files.
+        self.PType = "Coupling" if is_coupling else "Union"
+        # Show/hide the secondary list.
+        self._port2Label.setVisible(is_coupling)
+        self._port2List.setVisible(is_coupling)
+        self.fillSizes()
+        self.sizeList.setCurrentRow(0)
+
+    # ── rating-change handler ─────────────────────────────────────────────────
+
+    def _changeRating(self, item):
+        self.PRating = item.text()
+        self.currentRatingLab.setText(
+            translate("protoPypeForm", "Rating: ") + self.PRating)
+        self.fillSizes()
+        self.sizeList.setCurrentRow(0)
+
+    # ── fillSizes override ────────────────────────────────────────────────────
+def fillSizes(self):
+    """Load the appropriate CSV and populate sizeList (and port-2 list for couplings)."""
+    self.sizeList.clear()
+    self.pipeDictList = []
+
+    fname = self.PType + "_" + self.PRating + ".csv"
+    fpath = join(dirname(abspath(__file__)), "tablez", fname)
+    try:
+        with open(fpath, "r", encoding="utf-8-sig") as fh:
+            if self._isCoupling():
+                self.pipeDictList = list(csv.DictReader(fh, delimiter=";"))
+            else:
+                self.pipeDictList = list(
+                    csv.DictReader(fh, fieldnames=self._UNION_FIELDS, delimiter=";"))
+    except Exception:
+        return
+
+    if self._isCoupling():
+        seen = []
+        for row in self.pipeDictList:
+            ps = row["PSize"]
+            if ps not in seen:
+                seen.append(ps)
+                if qu:
+                    label = qu.format_psize(ps) + "  " + qu.format_dim(row.get("OD", ""))
+                else:
+                    label = ps + "  " + row.get("OD", "")
+                self.sizeList.addItem(label)
+    else:
+        for row in self.pipeDictList:
+            if qu:
+                label = qu.format_psize(row["PSize"]) + "  " + qu.format_dim(row.get("OD", ""))
+            else:
+                label = row["PSize"] + "  " + row.get("OD", "")
+            self.sizeList.addItem(label)
+
+    self._fillPort2()
+
+def _fillPort2(self):
+    """Populate _port2List with PSize2 options for the selected PSize."""
+    self._port2List.clear()
+    self._port2DictList = []
+
+    if not self._isCoupling() or not self.pipeDictList:
+        return
+
+    seen = []
+    for row in self.pipeDictList:
+        if row["PSize"] not in seen:
+            seen.append(row["PSize"])
+
+    idx = self.sizeList.currentRow()
+    if idx < 0 or idx >= len(seen):
+        return
+    run_psize = seen[idx]
+
+    for row in self.pipeDictList:
+        if row["PSize"] != run_psize:
+            continue
+        self._port2DictList.append(row)
+        if qu:
+            label = qu.format_psize(row.get("PSize2", "")) + "  " + qu.format_dim(row.get("OD2", ""))
+        else:
+            label = row.get("PSize2", "") + "  " + row.get("OD2", "")
+        self._port2List.addItem(label)
+
+    self._port2List.setCurrentRow(0)
+
+    # ── insert ────────────────────────────────────────────────────────────────
+
+    def insert(self):
+        if self._isCoupling():
+            # Use the row selected from the secondary list.
+            idx = self._port2List.currentRow()
+            if idx < 0 or idx >= len(self._port2DictList):
+                FreeCAD.Console.PrintWarning(
+                    "insertCouplingUnionForm: no port-1 size selected\n")
+                return
+            d = self._port2DictList[idx]
+            propList = [
+                d["PSize"],
+                d.get("PSize2", d["PSize"]),
+                float(pq(d["OD"])),
+                float(pq(d["OD2"])),
+                float(pq(d["A"])),
+                float(pq(d["C"])),
+                float(pq(d["D"])),
+                float(pq(d["E"])),
+                d.get("Conn", "SW"),
+            ]
+            self.lastFitting = pCmd.doSocketCoupling(
+                propList, FreeCAD.__activePypeLine__)[-1]
+        else:
+            # Union: use the row selected from the primary list.
+            idx = self.sizeList.currentRow()
+            if idx < 0 or idx >= len(self.pipeDictList):
+                FreeCAD.Console.PrintWarning(
+                    "insertCouplingUnionForm: no size selected\n")
+                return
+            d = self.pipeDictList[idx]
+            propList = [
+                d["PSize"],
+                float(pq(d["OD"])),
+                float(pq(d["A"])),
+                float(pq(d["C"])),
+                float(pq(d["D"])),
+                float(pq(d["E"])),
+                d.get("Conn", "SW"),
+            ]
+            self.lastFitting = pCmd.doSocketUnion(
+                propList, FreeCAD.__activePypeLine__)[-1]
+
+        FreeCAD.activeDocument().recompute()
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.Selection.addSelection(self.lastFitting)
+
+    # ── reverse ───────────────────────────────────────────────────────────────
+
+    def reverse(self):
+        """Flip selected couplings/unions (or the last inserted one) 180° around X."""
+        ptypes = ("SocketCoupling", "SocketUnion")
+        sel = [p for p in FreeCADGui.Selection.getSelection()
+               if hasattr(p, "PType") and p.PType in ptypes]
+        if sel:
+            for p in sel:
+                pCmd.rotateTheTubeAx(p, FreeCAD.Vector(1, 0, 0), 180)
+        elif self.lastFitting:
+            pCmd.rotateTheTubeAx(self.lastFitting, FreeCAD.Vector(1, 0, 0), 180)
+
+    # ── apply ─────────────────────────────────────────────────────────────────
+
+    def apply(self):
+        """Push current size/rating onto all selected coupling or union objects."""
+        for obj in FreeCADGui.Selection.getSelection():
+            if not hasattr(obj, "PType"):
+                continue
+
+            if obj.PType == "SocketCoupling" and self._isCoupling():
+                idx = self._port2List.currentRow()
+                if idx < 0 or idx >= len(self._port2DictList):
+                    continue
+                d = self._port2DictList[idx]
+                obj.PSize   = d["PSize"]
+                obj.PSize2  = d.get("PSize2", d["PSize"])
+                obj.OD      = pq(d["OD"])
+                obj.OD2     = pq(d["OD2"])
+                obj.A       = pq(d["A"])
+                obj.C       = pq(d["C"])
+                obj.D       = pq(d["D"])
+                obj.E       = pq(d["E"])
+                obj.Conn    = d.get("Conn", "SW")
+                obj.PRating = self.PRating
+                FreeCAD.activeDocument().recompute()
+
+            elif obj.PType == "SocketUnion" and not self._isCoupling():
+                idx = self.sizeList.currentRow()
+                if idx < 0 or idx >= len(self.pipeDictList):
+                    continue
+                d = self.pipeDictList[idx]
+                obj.PSize   = d["PSize"]
+                obj.OD      = pq(d["OD"])
+                obj.A       = pq(d["A"])
+                obj.C       = pq(d["C"])
+                obj.D       = pq(d["D"])
+                obj.E       = pq(d["E"])
+                obj.Conn    = d.get("Conn", "SW")
+                obj.PRating = self.PRating
+                FreeCAD.activeDocument().recompute()

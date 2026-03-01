@@ -106,6 +106,7 @@ class QuetzalWorkbench(Workbench):
             "Quetzal_InsertTerminalAdapter",
             "Quetzal_InsertReduct",
             "Quetzal_InsertCap",
+            "Quetzal_InsertCoupling",
             "Quetzal_InsertValve",
             "Quetzal_InsertFlange",
             "Quetzal_InsertGasket",
