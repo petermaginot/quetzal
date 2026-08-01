@@ -2528,6 +2528,8 @@ class Valve(pypeType):
             self._execute_pinch(fp, H)
             return
 
+        rating = fp.PRating.lower()
+
         c = Part.makeCone(fp.ODBody / 2, fp.ODBody / 5, H / 2,
                           FreeCAD.Vector(0, 0, -H / 2))
         v = c.fuse(c.mirror(FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 0, 1)))
