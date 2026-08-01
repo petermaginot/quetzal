@@ -596,19 +596,29 @@ class Flange(pypeType):
                 base = base.cut(hole)
                 hole.rotate(FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 0, 1), 360.0 / fp.n)
         # creates flange thickness
-        flange = base.extrude(FreeCAD.Vector(0, 0, fp.t)) 
-        fp.ViewObject.Deviation = 0.10
+        flange = base.extrude(FreeCAD.Vector(0, 0, fp.t))
+        # Tessellation quality is a display setting, and ViewObject is None in
+        # console mode. Setting it unguarded raised AttributeError mid-execute,
+        # which recompute swallows -- so every Flange came back with a NULL
+        # shape and no error, headless.
+        if FreeCAD.GuiUp and fp.ViewObject is not None:
+            fp.ViewObject.Deviation = 0.10
         if (
             fp.FlangeType == "SW"
             or fp.FlangeType == "WN"
             or fp.FlangeType == "LJ"
             or fp.FlangeType == "SO"
         ):
-            # creates flange neck (corrected for raised face addition)
-            nn = Part.makeCylinder(fp.ODp / 2, fp.T1, vO, vZ).cut(
-                Part.makeCylinder(fp.d / 2, fp.T1, vO, vZ)
-            )
-            flange = flange.fuse(nn)
+            # creates flange neck (corrected for raised face addition).
+            # Only when it has real dimensions: ODp/T1 are documented OPTIONAL,
+            # and building a zero-radius zero-height cylinder produced a
+            # degenerate solid that fused into an invalid shape rather than
+            # being skipped.
+            if fp.ODp > 0 and fp.T1 > 0 and fp.ODp > fp.d:
+                nn = Part.makeCylinder(fp.ODp / 2, fp.T1, vO, vZ).cut(
+                    Part.makeCylinder(fp.d / 2, fp.T1, vO, vZ)
+                )
+                flange = flange.fuse(nn)
             if fp.trf > 0 and fp.drf < fp.D:
                 rf = Part.makeCylinder(fp.drf / 2, fp.trf, vO, vZ * -1).cut(
                     Part.makeCylinder(fp.d / 2, fp.trf, vO, vZ * -1)
@@ -1039,9 +1049,13 @@ class Tee(pypeType):
                 except Exception as e:
                     # Fillet failed -- fall back to unfilleted shape rather than
                     # crashing the whole recompute
+                    # float() because fillet_r is a Base.Quantity, which has no
+                    # numeric __format__ -- the fallback that exists to avoid
+                    # crashing the recompute was itself raising TypeError and
+                    # taking the Tee down with it.
                     FreeCAD.Console.PrintWarning(
                         "Tee fillet failed (r={:.2f}mm): {} -- using unfilleted shape\n"
-                        .format(fillet_r, e)
+                        .format(float(fillet_r), e)
                     )
 
         fp.Shape = Base
@@ -3958,3 +3972,4 @@ class SocketUnion(pypeType):
             FreeCAD.Vector(0, 0,  1),
         ]
         super(SocketUnion, self).execute(fp)  # perform common operations
+
