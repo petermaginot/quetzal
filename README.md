@@ -61,6 +61,8 @@ Wiki for older Dodo and Flamingo versions of the workbench
 Discussion in the FreeCAD Forum:
 <https://forum.freecad.org/viewtopic.php?t=22711>
 
+[Drawings 2D nomeclature of tablez CVS]: ./Nomeclature.md
+
 ## Changelog
 
 Read our [CHANGELOG] file to know about the latest changes.
