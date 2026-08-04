@@ -633,6 +633,14 @@ def getSelectionPortAttachment(selex=None):
 
 class ViewProvider:
     def __init__(self, obj, icon_fn):
+        # In console mode DocumentObject.ViewObject is None (FreeCAD returns
+        # Py::None when FreeCADGui has no Gui::Document for the App document),
+        # so every make*() factory died here before it could return its object.
+        # Guarding once, in the provider, covers all 17 call sites and any
+        # added later -- the geometry in pFeatures is pure Part/BRep and has
+        # never needed the GUI.
+        if obj is None or not FreeCAD.GuiUp:
+            return
         obj.Proxy = self
         self._check_attr()
         self.icon_fn = get_icon_path(icon_fn or "quetzal")
@@ -1331,8 +1339,9 @@ def makeShell(L=1000, W=1500, H=1500, thk1=6, thk2=8):
     pFeatures.Shell(a, L, W, H, thk1, thk2)
     ViewProvider(a.ViewObject, "Quetzal_InsertTank")
     a.Placement.Base = FreeCAD.Vector(0, 0, 0)
-    a.ViewObject.ShapeColor = 0.0, 0.0, 1.0
-    a.ViewObject.Transparency = 85
+    if FreeCAD.GuiUp:
+        a.ViewObject.ShapeColor = 0.0, 0.0, 1.0
+        a.ViewObject.Transparency = 85
     FreeCAD.ActiveDocument.recompute()
     a.Label = translate("Objects", "Tank")
     return a
@@ -1593,8 +1602,9 @@ def makePypeLine2(
     if not pl:
         a = FreeCAD.ActiveDocument.addObject("Part::FeaturePython", lab)
         pFeatures.PypeLine2(a, DN, PRating, OD, thk, BR, lab)
-        pFeatures.ViewProviderPypeLine(a.ViewObject)  # a.ViewObject.Proxy=0
-        a.ViewObject.ShapeColor = color
+        if FreeCAD.GuiUp:
+            pFeatures.ViewProviderPypeLine(a.ViewObject)  # a.ViewObject.Proxy=0
+            a.ViewObject.ShapeColor = color
         if len(FreeCADGui.Selection.getSelection()) == 1:
             obj = FreeCADGui.Selection.getSelection()[0]
             isWire = hasattr(obj, "Shape") and obj.Shape.Edges  # type(obj.Shape)==Part.Wire
