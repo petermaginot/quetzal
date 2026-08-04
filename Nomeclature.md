@@ -111,40 +111,40 @@ Section profile type [Stype] summary table:
 
 
 <figure>
-    <img src="/opt/quetzal/doc/Elbow-reference.svg"
+    <img src="./doc/Elbow-reference.svg"
          alt="GDL,Mexico">
     <figcaption>Elbow variables.</figcaption>
 </figure>
 
 <figure>
-    <img src="/opt/quetzal/doc/Reduct-reference.svg"
+    <img src="./doc/Reduct-reference.svg"
          alt="GDL,Mexico">
     <figcaption>Reduct variables.</figcaption>
 </figure>
 
 <figure>
-    <img src="/opt/quetzal/doc/Cap-reference.svg"
+    <img src="./doc/Cap-reference.svg"
          alt="GDL,Mexico">
     <figcaption>Cap variables.</figcaption>
 </figure>
 <figure>
-    <img src="/opt/quetzal/doc/Tee-reference.svg"
+    <img src="./doc/Tee-reference.svg"
          alt="GDL,Mexico">
     <figcaption>Tee variables.</figcaption>
 </figure>
 <figure>
-    <img src="/opt/quetzal/doc/Gasket-reference.svg"
+    <img src="./doc/Gasket-reference.svg"
          alt="GDL,Mexico">
     <figcaption>Gasket variables.</figcaption>
 </figure>
 <figure>
-    <img src="/opt/quetzal/doc/TerminalAdapter-reference.svg"
+    <img src="./doc/TerminalAdapter-reference.svg"
          alt="GDL,Mexico">
     <figcaption>TerminalAdapter variables.</figcaption>
 </figure>
 
 <figure>
-    <img src="/opt/quetzal/doc/Coupling-reference.svg"
+    <img src="./doc/Coupling-reference.svg"
          alt="GDL,Mexico">
     <figcaption>Coupling variables.</figcaption>
 </figure>
