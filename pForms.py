@@ -1205,7 +1205,6 @@ class insertTerminalAdapterForm(dodoDialogs.protoPypeForm):
 
     def changeRating2(self, s):
         self.PRating = s
-        self.currentRatingLab.setText(translate("protoPypeForm", "Rating: ") + self.PRating)
         self.sizeList.blockSignals(True)
         try:
             self.fillSizes()
@@ -1862,8 +1861,6 @@ class insertReductForm(dodoDialogs.protoPypeForm):
         if 0 <= cur_idx < len(self.pipeDictList):
             cur_psize = self.pipeDictList[cur_idx].get("PSize")
         self.PRating = s
-        self.currentRatingLab.setText(
-            translate("protoPypeForm", "Rating: ") + self.PRating)
         self.sizeList.blockSignals(True)
         try:
             self.fillSizes()
