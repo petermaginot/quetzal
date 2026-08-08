@@ -139,6 +139,28 @@ class insertReduct:
         }
 
 
+class insertDuctReduction:
+    def IsActive(self):
+        if FreeCAD.ActiveDocument is None:
+            return False
+        else:
+            return True
+
+    def Activated(self):
+        import pForms
+
+        pForms.insertDuctReductionForm()
+
+    def GetResources(self):
+        return {
+            "Pixmap": "Quetzal_InsertReduct",
+            "MenuText": QT_TRANSLATE_NOOP("Quetzal_InsertDuctReduction", "Insert a duct reduction"),
+            "ToolTip": QT_TRANSLATE_NOOP(
+                "Quetzal_InsertDuctReduction", Quetzal_tooltips.duct_reduction_tooltip
+            ),
+        }
+
+
 class insertCap:
     def IsActive(self):
         if FreeCAD.ActiveDocument is None:
@@ -735,6 +757,7 @@ addCommand("Quetzal_InsertPipe", insertPipe())
 addCommand("Quetzal_InsertElbow", insertElbow())
 addCommand("Quetzal_InsertDuctElbow", insertDuctElbow())
 addCommand("Quetzal_InsertReduct", insertReduct())
+addCommand("Quetzal_InsertDuctReduction", insertDuctReduction())
 addCommand("Quetzal_InsertCap", insertCap())
 addCommand("Quetzal_InsertTee", insertTee())
 addCommand("Quetzal_InsertValve", insertValve())
