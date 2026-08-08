@@ -633,6 +633,14 @@ def getSelectionPortAttachment(selex=None):
 
 class ViewProvider:
     def __init__(self, obj, icon_fn):
+        # In console mode DocumentObject.ViewObject is None (FreeCAD returns
+        # Py::None when FreeCADGui has no Gui::Document for the App document),
+        # so every make*() factory died here before it could return its object.
+        # Guarding once, in the provider, covers all 17 call sites and any
+        # added later -- the geometry in pFeatures is pure Part/BRep and has
+        # never needed the GUI.
+        if obj is None or not FreeCAD.GuiUp:
+            return
         obj.Proxy = self
         self._check_attr()
         self.icon_fn = get_icon_path(icon_fn or "quetzal")
@@ -844,6 +852,38 @@ def makeElbow(propList=[], pos=None, Z=None, rating="SCH-STD"):
     port0_world = a.Placement.multVec(a.Ports[0])
     a.Placement.Base = pos - port0_world
     a.Label = translate("Objects", "Elbow")
+    return a
+
+
+def makeDuctElbow(propList=[], pos=None, Z=None, rating="Rectangular"):
+    """Adds a rectangular duct elbow object.
+
+    propList is one optional list with 6 elements:
+      PSize (string): nominal duct size
+      W (float): duct width
+      H (float): duct height
+      thk (float): wall thickness
+      BendAngle (float): bend angle in degrees
+      BendRadius (float): centerline bend radius
+    """
+    if pos == None:
+        pos = FreeCAD.Vector(0, 0, 0)
+    if Z == None:
+        Z = FreeCAD.Vector(0, 0, 1)
+    a = FreeCAD.ActiveDocument.addObject("Part::FeaturePython", "Duct-Elbow")
+    if len(propList) == 6:
+        pFeatures.DuctElbow(a, rating, *propList)
+    else:
+        pFeatures.DuctElbow(a, rating)
+    if a.ViewObject:
+        ViewProvider(a.ViewObject, "Quetzal_InsertElbow")
+
+    port0_local_dir = a.PortDirections[0] if a.PortDirections else FreeCAD.Vector(0, 0, 1)
+    rot = FreeCAD.Rotation(port0_local_dir, Z)
+    a.Placement.Rotation = rot.multiply(a.Placement.Rotation)
+    port0_world = a.Placement.multVec(a.Ports[0])
+    a.Placement.Base = pos - port0_world
+    a.Label = translate("Objects", "Duct Elbow")
     return a
 
 
@@ -1348,6 +1388,35 @@ def makeUbolt(propList=[], pos=None, Z=None):
     return a
 
 
+def makeBeamClamp(propList=[], pos=None, Z=None):
+    """Adds a beam clamp object:
+    makeBeamClamp(propList,pos,Z);
+      propList is one optional list with 9 elements:
+        PSize (string): catalog size row
+        ClampType (string): the clamp type or standard
+        ProductCode (string): vendor product code
+        Bolt (string): nominal bolt size
+        Y, X, V, T, W (float): catalog dimensions in mm
+      pos (vector): position of insertion; default = 0,0,0
+      Z (vector): orientation: default = 0,0,1
+    """
+    if pos == None:
+        pos = FreeCAD.Vector(0, 0, 0)
+    if Z == None:
+        Z = FreeCAD.Vector(0, 0, 1)
+    a = FreeCAD.ActiveDocument.addObject("Part::FeaturePython", "Beam-Clamp")
+    if len(propList) == 9:
+        pFeatures.BeamClamp(a, *propList)
+    else:
+        pFeatures.BeamClamp(a)
+    ViewProvider(a.ViewObject, "Quetzal_InsertUBolt")
+    a.Placement.Base = pos
+    rot = FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), Z)
+    a.Placement.Rotation = rot.multiply(a.Placement.Rotation)
+    a.Label = translate("Objects", "Beam Clamp")
+    return a
+
+
 def makeShell(L=1000, W=1500, H=1500, thk1=6, thk2=8):
     """
     makeShell(L,W,H,thk1,thk2)
@@ -1361,8 +1430,9 @@ def makeShell(L=1000, W=1500, H=1500, thk1=6, thk2=8):
     pFeatures.Shell(a, L, W, H, thk1, thk2)
     ViewProvider(a.ViewObject, "Quetzal_InsertTank")
     a.Placement.Base = FreeCAD.Vector(0, 0, 0)
-    a.ViewObject.ShapeColor = 0.0, 0.0, 1.0
-    a.ViewObject.Transparency = 85
+    if FreeCAD.GuiUp:
+        a.ViewObject.ShapeColor = 0.0, 0.0, 1.0
+        a.ViewObject.Transparency = 85
     FreeCAD.ActiveDocument.recompute()
     a.Label = translate("Objects", "Tank")
     return a
@@ -1623,8 +1693,9 @@ def makePypeLine2(
     if not pl:
         a = FreeCAD.ActiveDocument.addObject("Part::FeaturePython", lab)
         pFeatures.PypeLine2(a, DN, PRating, OD, thk, BR, lab)
-        pFeatures.ViewProviderPypeLine(a.ViewObject)  # a.ViewObject.Proxy=0
-        a.ViewObject.ShapeColor = color
+        if FreeCAD.GuiUp:
+            pFeatures.ViewProviderPypeLine(a.ViewObject)  # a.ViewObject.Proxy=0
+            a.ViewObject.ShapeColor = color
         if len(FreeCADGui.Selection.getSelection()) == 1:
             obj = FreeCADGui.Selection.getSelection()[0]
             isWire = hasattr(obj, "Shape") and obj.Shape.Edges  # type(obj.Shape)==Part.Wire
@@ -2249,14 +2320,14 @@ def makeValve(propList=[], pos=None, Z=None, flgPropList=None, actuator="Handle"
       Conn    (string): "SW" or "TH"
       Kv      (float) : flow factor  [optional]
 
-    propList elements for the flanged (Trunnion Ball) path:
+    propList elements for the flanged path:
       DN      (string): nominal diameter
       VType   (string): valve type (e.g. "Ball_LongPatternRF")
       H       (float) : body length, flange face to flange face
       Kv      (float) : flow factor
       Conn    (string): pressure class, e.g. "150lb"
-      TopH    (float) : optional centerline-to-top height
-      WheelD  (float) : optional handwheel diameter
+      BottomH (float) : lower body envelope from centerline [optional]
+      TopH    (float) : upper body envelope from centerline [optional]
 
     flgPropList — list of blind-flange properties read from the matching
       Flange_ASME-BL-RF-<Conn>.csv table.  Elements in order:
@@ -2284,8 +2355,8 @@ def makeValve(propList=[], pos=None, Z=None, flgPropList=None, actuator="Handle"
         H     = float(propList[2]) if len(propList) > 2 else 200.0
         Kv    = float(propList[3]) if len(propList) > 3 else 0.0
         Conn  = str(propList[4]) if len(propList) > 4 else "150lb"
-        TopH  = float(propList[5]) if len(propList) > 5 else 0.0
-        WheelD = float(propList[6]) if len(propList) > 6 else 0.0
+        bottomH = float(propList[5]) if len(propList) > 5 else 0.0
+        topH    = float(propList[6]) if len(propList) > 6 else 0.0
         # flgPropList: [PSize, FlangeType, D, t, f, n, df, drf, trf]
         flgD   = float(flgPropList[2]) if len(flgPropList) > 2 else 0.0
         flgt   = float(flgPropList[3]) if len(flgPropList) > 3 else 0.0
@@ -2297,7 +2368,7 @@ def makeValve(propList=[], pos=None, Z=None, flgPropList=None, actuator="Handle"
         pFeatures.Valve(a, DN=DN, VType=VType, H=H, Kv=Kv, Conn=Conn,
                         flgD=flgD, flgt=flgt, flgdrf=flgdrf, flgtrf=flgtrf,
                         flgdf=flgdf, flgf=flgf, flgn=flgn,
-                        actuator=actuator, topH=TopH, wheelD=WheelD)
+                        actuator=actuator, bottomH=bottomH, topH=topH)
     elif propList:
         # Detect socket/threaded variant by the presence of a "Conn" field.
         # Convention: propList for the SW/TH path carries Conn as element [6]

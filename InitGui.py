@@ -102,6 +102,7 @@ class QuetzalWorkbench(Workbench):
         self.pypeList = [
             "Quetzal_InsertPipe",
             "Quetzal_InsertElbow",
+            "Quetzal_InsertDuctElbow",
             "Quetzal_InsertTee",
             "Quetzal_InsertReduct",
             "Quetzal_InsertDuctReduction",
@@ -135,9 +136,8 @@ class QuetzalWorkbench(Workbench):
         import DraftTools
         import draftutils.init_tools as it
 
-        it.init_toolbar(self,
-                        QT_TRANSLATE_NOOP("Workbench", "Draft snap"),
-                        it.get_draft_snap_commands())
+        self.appendToolbar(QT_TRANSLATE_NOOP("Workbench", "Draft snap"),
+                           it.get_draft_snap_commands())
         self.qm = toolList  # ["pipeQM","elbowQM","reductQM"]
         self.appendToolbar(QT_TRANSLATE_NOOP("Workbench", "Pipe tools"), self.pypeList)
         Log("Loading Pipe tools: done\n")
