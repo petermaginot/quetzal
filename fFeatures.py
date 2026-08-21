@@ -5,6 +5,7 @@ __author__ = "oddtopus"
 __url__ = "github.com/oddtopus/dodo"
 __license__ = "LGPL 3"
 
+from ast import List
 import csv
 from math import degrees, sqrt, cos, radians, sin, tan
 from os import listdir
@@ -41,9 +42,10 @@ import ShpstData
 
 translate = FreeCAD.Qt.translate
 QT_TRANSLATE_NOOP = FreeCAD.Qt.QT_TRANSLATE_NOOP
-settings = QSettings("quetzal","fFeatures")
+settings = QSettings("quetzal", "fFeatures")
 
 ################ FUNCTIONS ###########################
+
 
 def newProfile(prop):
     """
@@ -80,6 +82,7 @@ def newProfile(prop):
             )
     return profile
 
+
 def indexEdge(edge, listedges):
     """
     Auxiliary function to find the index of an edge
@@ -88,6 +91,7 @@ def indexEdge(edge, listedges):
         if e.isSame(edge):
             return listedges.index(e)
     return None
+
 
 def findFB(beamName=None, baseName=None):
     """
@@ -113,6 +117,7 @@ def findFB(beamName=None, baseName=None):
                 return FreeCAD.ActiveDocument.getObject(name)
     return None
 
+
 def refreshBranchObject(beamChild=None):
     """
     Touch each FrameBranch object in document
@@ -124,7 +129,11 @@ def refreshBranchObject(beamChild=None):
     # print("Algoritmo de busqueda de FrameBranch:")
     # print(f"tiempo total: {timefull2:.4f} segundos")
     # print(f"Promedio por ejecución: {timefull2/1000:.6f} segundos")
-    for bf in [o for o in FreeCAD.ActiveDocument.Objects if hasattr(o, "FType") and o.FType == "FrameBranch"]:
+    for bf in [
+        o
+        for o in FreeCAD.ActiveDocument.Objects
+        if hasattr(o, "FType") and o.FType == "FrameBranch"
+    ]:
         for selected in bf.Beams:
             if selected == beamChild.Name:
                 # print(bf.Name)
@@ -353,6 +362,7 @@ class frameLineForm(QDialog):
                 prof.Placement.Rotation = FreeCAD.Base.Rotation()
                 self.current.Profile = prof
 
+
 class insertSectForm(QWidget):
     """dialog for Arch.makeProfile
     This allows to create in the model the 2D profiles to be used
@@ -454,7 +464,9 @@ class insertSectForm(QWidget):
             group.addObject(s)
         FreeCAD.activeDocument().recompute()
 
+
 import dodoDialogs
+
 
 class frameBranchForm(dodoDialogs.protoTypeDialog):
     "dialog for framebranches"
@@ -497,8 +509,8 @@ class frameBranchForm(dodoDialogs.protoTypeDialog):
 
     def on_currentIndexChanged(self) -> None:
         profilepath = FreeCAD.getUserAppDataDir() + "Mod/quetzal/iconz/PreviewSections/"
-        lastsizeselected=self.form.Sizes_comboBox.currentText()
-        fullimagepath = profilepath+str(lastsizeselected)+".png"
+        lastsizeselected = self.form.Sizes_comboBox.currentText()
+        fullimagepath = profilepath + str(lastsizeselected) + ".png"
         # FreeCAD.Console.PrintMessage(fullimagepath+"\r\n")
         profilepixmap = QPixmap(fullimagepath)
         self.form.ProfileImage.setPixmap(profilepixmap)
@@ -507,10 +519,23 @@ class frameBranchForm(dodoDialogs.protoTypeDialog):
         """
         Check profileslist and return full properties selected on the widget list from BIM workbench
         """
+        self.localProp = list()
+        tablez = listdir(join(dirname(abspath(__file__)), "tablez"))
+        csvfiles = [name for name in tablez if name.startswith("Section")]
+        self.BIM_PropList = ArchProfile.readPresets()
+        for fileName in csvfiles:
+            csvopen = open(join(dirname(abspath(__file__)), "tablez", fileName))
+            reader = csv.reader(csvopen, delimiter=";")
+            self.localProp = self.localProp + [x for x in reader]
+        lastid = self.BIM_PropList[-1][0] + 1
+        localPropWIndex = [
+            [index + lastid] + sublista for index, sublista in enumerate(self.localProp)
+        ]
+        self.BIM_PropList = self.BIM_PropList + localPropWIndex
         for value in self.BIM_PropList:
             if self.form.Sizes_comboBox.currentText() in value[2]:
-                settings.setValue("LastRateApplied",self.form.Rate_comboBox.currentText())
-                settings.setValue("LastSizeApplied",self.form.Sizes_comboBox.currentText())
+                settings.setValue("LastRateApplied", self.form.Rate_comboBox.currentText())
+                settings.setValue("LastSizeApplied", self.form.Sizes_comboBox.currentText())
                 return value
 
     def makeSingle(self):
@@ -522,13 +547,12 @@ class frameBranchForm(dodoDialogs.protoTypeDialog):
                 self.form.Sizes_comboBox.currentText()
             )[0]
         else:
-            #Properties from selected row dict to list from BIM
+            # Properties from selected row dict to list from BIM
             prop = self.getPropsfromSizes()
-            # FreeCAD.Console.PrintMessage(prop)
             if len(self.LocalSizesDict) != 0:
                 # prop2 = self.sectDictList[self.form.Sizes_comboBox.currentRow()]
-                index=self.form.Sizes_comboBox.currentIndex()
-                #Convert localsizedict to list
+                index = self.form.Sizes_comboBox.currentIndex()
+                # Convert localsizedict to list
                 # prop2 = list(self.LocalSizesDict[index].values())
                 # prop=prop2
             FreeCAD.Console.PrintMessage(prop)
@@ -667,169 +691,163 @@ class frameBranchForm(dodoDialogs.protoTypeDialog):
         for object in seldoc.Objects:
             if object.Name.startswith("cutplane"):
                 miterplanes.append(object.Shape.Faces[0])
-                object.Visibility=False
+                object.Visibility = False
         return miterplanes
 
     def generateBisectPlanes(self):
         """Get intersections between lines/wire segments and generate a
         bisect cutting plane at every junction point."""
- 
+
         sel = FreeCADGui.Selection.getSelection()
         if not sel:
             FreeCAD.Console.PrintError("No selection found.\n")
             return
- 
+
         base_obj = sel[0].Base
- 
+
         if sel[0].FType != "FrameBranch":
             FreeCAD.Console.PrintWarning("Selected object is not a FrameBranch.\n")
             return
- 
+
         # ---- Sketch-based geometry (lines stored as Geometry elements) ----
         if hasattr(base_obj, "Geometry"):
             self._bisect_from_sketch(sel[0], base_obj)
- 
+
         # ---- Wire / polyline-based geometry (Points list) ----
         elif hasattr(base_obj, "Points"):
             self._bisect_from_wire(sel[0], base_obj)
- 
+
         else:
-            FreeCAD.Console.PrintWarning(
-                "Base object has neither Geometry nor Points attribute.\n"
-            )
- 
+            FreeCAD.Console.PrintWarning("Base object has neither Geometry nor Points attribute.\n")
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
- 
+
     def _bisect_from_sketch(self, frame_obj, base_obj):
         """Process sketch geometry: find all segment intersections and
         create one bisect plane per unique junction."""
- 
+
         geometry = base_obj.Geometry
         # Use a set of frozensets for O(1) duplicate detection.
         visited_pairs = set()
- 
+
         for element in geometry:
             for subelement in geometry:
                 # Skip identical elements.
                 if element.Tag == subelement.Tag:
                     continue
- 
+
                 pair = frozenset([element.Tag, subelement.Tag])
                 if pair in visited_pairs:
                     continue
- 
+
                 inter = findIntersection(
                     element.toShape().Edges[0],
                     subelement.toShape().Edges[0],
                     infinite1=False,
                     infinite2=False,
                 )
- 
+
                 if not inter:
                     continue
- 
+
                 visited_pairs.add(pair)
                 inter_point = inter[0]
- 
+
                 FreeCAD.Console.PrintMessage(
                     f"Intersection found between {element.Tag} "
                     f"and {subelement.Tag} at {inter_point}\n"
                 )
- 
+
                 r_elem_start = self.roundVectors(element.StartPoint, 2)
-                r_elem_end   = self.roundVectors(element.EndPoint,   2)
-                r_sub_start  = self.roundVectors(subelement.StartPoint, 2)
-                r_sub_end    = self.roundVectors(subelement.EndPoint,   2)
-                r_inter      = self.roundVectors(inter_point, 2)
- 
+                r_elem_end = self.roundVectors(element.EndPoint, 2)
+                r_sub_start = self.roundVectors(subelement.StartPoint, 2)
+                r_sub_end = self.roundVectors(subelement.EndPoint, 2)
+                r_inter = self.roundVectors(inter_point, 2)
+
                 # Vector pointing *away* from the intersection along each segment.
-                v1 = self._outgoing_vector(element,   r_elem_start, r_elem_end,   r_inter)
-                v2 = self._outgoing_vector(subelement, r_sub_start,  r_sub_end,    r_inter)
- 
+                v1 = self._outgoing_vector(element, r_elem_start, r_elem_end, r_inter)
+                v2 = self._outgoing_vector(subelement, r_sub_start, r_sub_end, r_inter)
+
                 if v1 is None or v2 is None:
                     FreeCAD.Console.PrintWarning(
                         "Could not determine outgoing vectors – skipping pair.\n"
                     )
                     continue
- 
+
                 bisect_vec = fCmd.bisect(v1, v2)
                 self._create_bisect_plane(frame_obj, inter_point, bisect_vec)
- 
+
     def _bisect_from_wire(self, frame_obj, base_obj):
         """Process a Wire/polyline object: create a bisect plane at every
         vertex where two consecutive segments share a point."""
- 
+
         points = base_obj.Points
         n = len(points)
         if n < 2:
             return
- 
+
         closed = base_obj.Closed
- 
+
         # Build the range of *segment indices* to visit.
         # Segment i goes from points[i] to points[(i+1) % n].
         seg_range = range(n) if closed else range(n - 1)
- 
+
         # For each interior vertex (or all vertices if closed) compute
         # the bisect between the incoming and outgoing segment.
         if closed:
-            vertex_range = range(n)          # every vertex is a junction
+            vertex_range = range(n)  # every vertex is a junction
         else:
-            vertex_range = range(1, n - 1)   # skip the two open endpoints
- 
+            vertex_range = range(1, n - 1)  # skip the two open endpoints
+
         for vi in vertex_range:
             prev_idx = (vi - 1) % n
             next_idx = (vi + 1) % n
- 
-            p_prev  = FreeCAD.Vector(*points[prev_idx])
-            p_curr  = FreeCAD.Vector(*points[vi])
-            p_next  = FreeCAD.Vector(*points[next_idx])
- 
+
+            p_prev = FreeCAD.Vector(*points[prev_idx])
+            p_curr = FreeCAD.Vector(*points[vi])
+            p_next = FreeCAD.Vector(*points[next_idx])
+
             # Outgoing vectors from the junction vertex.
-            v_incoming = (p_prev - p_curr)   # direction toward previous point
-            v_outgoing = (p_next - p_curr)   # direction toward next point
- 
+            v_incoming = p_prev - p_curr  # direction toward previous point
+            v_outgoing = p_next - p_curr  # direction toward next point
+
             if v_incoming.Length < 1e-9 or v_outgoing.Length < 1e-9:
-                FreeCAD.Console.PrintWarning(
-                    f"Degenerate segment at vertex {vi} – skipping.\n"
-                )
+                FreeCAD.Console.PrintWarning(f"Degenerate segment at vertex {vi} – skipping.\n")
                 continue
- 
+
             bisect_vec = fCmd.bisect(v_incoming, v_outgoing)
- 
-            FreeCAD.Console.PrintMessage(
-                f"Wire junction at vertex {vi}: {p_curr}\n"
-            )
- 
+
+            FreeCAD.Console.PrintMessage(f"Wire junction at vertex {vi}: {p_curr}\n")
+
             self._create_bisect_plane(frame_obj, p_curr, bisect_vec)
- 
+
         # Optionally handle open-wire endpoints (only one segment meets here).
         # A single segment has no bisect partner, so we use its own direction
         # as the cut normal – useful for square end-cuts.
         # if not closed:
         #     self._create_endpoint_plane(frame_obj, points, 0,      at_start=True)
         #     self._create_endpoint_plane(frame_obj, points, n - 1,  at_start=False)
- 
+
     # ------------------------------------------------------------------
     # Plane factory – shared by both code paths
     # ------------------------------------------------------------------
- 
+
     def _create_bisect_plane(self, frame_obj, inter_point, bisect_vec):
         """Add a Part::Plane to the document, oriented so its normal aligns
         with *bisect_vec* and centred on *inter_point*."""
- 
-        doc   = FreeCAD.activeDocument()
+
+        doc = FreeCAD.activeDocument()
         plane = doc.addObject("Part::Plane", "cutplane")
- 
+
         plane.AttachmentSupport = frame_obj.Base
-        plane.MapMode           = "FlatFace"
- 
+        plane.MapMode = "FlatFace"
+
         # Random colour so overlapping planes are visually distinct.
         rand_color = tuple(randint(0, 256, size=3) / 255.0)
         plane.ViewObject.ShapeAppearance = FreeCAD.Material(DiffuseColor=rand_color)
- 
+
         # Initial placement – shift origin so the plane is centred on the
         # intersection point before rotation.
         rot_vector = inter_point - FreeCAD.Vector(0, plane.Length / 2, -plane.Length / 2)
@@ -839,66 +857,64 @@ class frameBranchForm(dodoDialogs.protoTypeDialog):
         )
         plane.AttachmentOffset = placement_rot
         plane.recompute()
- 
+
         # Rotate normal to align with bisect vector.
         placement_rel = FreeCAD.Placement(
             FreeCAD.Vector(0, 0, 0),
             FreeCAD.Rotation(plane.Shape.normalAt(0, 0), bisect_vec),
             inter_point,
         ).multiply(placement_rot)
- 
+
         # Extra 90° around Z when the initial normal points along +X.
         if self.roundVectors(plane.Shape.normalAt(0, 0), 0) == FreeCAD.Vector(1, 0, 0):
             extra_rot = 90
         else:
             extra_rot = 0
- 
+
         placement_final = FreeCAD.Placement(
             FreeCAD.Vector(0, 0, 0),
             FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), extra_rot),
             inter_point,
         ).multiply(placement_rel)
- 
+
         plane.AttachmentOffset = placement_final
         plane.recompute()
- 
+
     def _create_endpoint_plane(self, frame_obj, points, vi, at_start):
         """Create a square-cut plane at an open-wire endpoint.
         The cut normal is the direction of the only segment that meets here."""
- 
+
         n = len(points)
         p_curr = FreeCAD.Vector(*points[vi])
- 
+
         if at_start:
             neighbour = FreeCAD.Vector(*points[vi + 1])
-            direction = (p_curr - neighbour)   # outward from wire
+            direction = p_curr - neighbour  # outward from wire
         else:
             neighbour = FreeCAD.Vector(*points[vi - 1])
-            direction = (p_curr - neighbour)
- 
+            direction = p_curr - neighbour
+
         if direction.Length < 1e-9:
             return
- 
-        FreeCAD.Console.PrintMessage(
-            f"Wire endpoint plane at vertex {vi}: {p_curr}\n"
-        )
+
+        FreeCAD.Console.PrintMessage(f"Wire endpoint plane at vertex {vi}: {p_curr}\n")
         self._create_bisect_plane(frame_obj, p_curr, direction)
- 
+
     # ------------------------------------------------------------------
     # Utilities
     # ------------------------------------------------------------------
- 
+
     @staticmethod
     def _outgoing_vector(segment, r_start, r_end, r_inter):
         """Return the vector pointing *away* from *r_inter* along *segment*.
         Returns None if the intersection is not at either endpoint."""
- 
+
         if r_start == r_inter:
             return FreeCAD.Vector(segment.EndPoint - segment.StartPoint)
         elif r_end == r_inter:
             return FreeCAD.Vector(segment.StartPoint - segment.EndPoint)
         return None
- 
+
     @staticmethod
     def roundVectors(vector, decimals):
         return FreeCAD.Vector(
@@ -956,8 +972,10 @@ class frameBranchForm(dodoDialogs.protoTypeDialog):
                 self.form.lab2.setText("<multiple selection>")
             else:
                 self.form.lab2.setText(shapes[0][1] + ": " + shapes[0][0].ShapeType)
-        except (IndexError,ValueError) as e:
-            FreeCAD.Console.PrintError("Not Vertex, edge or face selected as trim or extend target \n")
+        except (IndexError, ValueError) as e:
+            FreeCAD.Console.PrintError(
+                "Not Vertex, edge or face selected as trim or extend target \n"
+            )
 
     def mouseActionB1(self, CtrlAltShift):
         v = FreeCADGui.ActiveDocument.ActiveView
@@ -1003,9 +1021,9 @@ class frameBranchForm(dodoDialogs.protoTypeDialog):
         """
         tablez = listdir(join(dirname(abspath(__file__)), "tablez"))
         files = [name for name in tablez if name.startswith("Section")]
-        QuetzalRatings = [s.lstrip("Section_").rstrip(".csv") for s in files]
         self.BIM_PropList = ArchProfile.readPresets()
         "Avoid to add dublicated ratings names in widget"
+        QuetzalRatings = [s.lstrip("Section_").rstrip(".csv") for s in files]
         for rating in self.BIM_PropList:
             if rating[1] not in QuetzalRatings:
                 QuetzalRatings.append(rating[1])
@@ -1037,7 +1055,10 @@ class frameBranchForm(dodoDialogs.protoTypeDialog):
             temp_sizelist = list()
             "Retrieved ratings from BIM csv library"
             for profilesizes in self.BIM_PropList:
-                if profilesizes[1] == self.form.Rate_comboBox.currentText() and profilesizes[2] not in temp_sizelist:
+                if (
+                    profilesizes[1] == self.form.Rate_comboBox.currentText()
+                    and profilesizes[2] not in temp_sizelist
+                ):
                     # FreeCAD.Console.PrintMessage(profilesizes[2]+'\r\n')
                     temp_sizelist.append(profilesizes[2])
             "Add BIM list to listSizes"
@@ -1195,11 +1216,15 @@ class frameBranchForm(dodoDialogs.protoTypeDialog):
         try:
             FreeCAD.activeDocument().openTransaction(translate("Transaction", "Trim Frame Branch"))
             if not self.targets:
-                raise IndexError("Targets do not selected with set objetives button previus to execute this command \n")
+                raise IndexError(
+                    "Targets do not selected with set objetives button previus to execute this command \n"
+                )
             for target in self.targets:
                 for b in fCmd.beams():
                     if not hasattr(b, "tailOffset") and not hasattr(b, "headOffset"):
-                        raise AttributeError("Missing tail and head variables, it may not a beam object \n")
+                        raise AttributeError(
+                            "Missing tail and head variables, it may not a beam object \n"
+                        )
                     if int(FreeCAD.Version()[0]) >= 1:
                         edge = b.AttachmentSupport[0][0].Shape.getElement(
                             b.AttachmentSupport[0][1][0]
@@ -1227,7 +1252,7 @@ class frameBranchForm(dodoDialogs.protoTypeDialog):
                     refreshBranchObject(b)
             FreeCAD.ActiveDocument.commitTransaction()
         except Exception as e:
-            FreeCAD.Console.PrintError(""+str(e))
+            FreeCAD.Console.PrintError("" + str(e))
 
     def refresh(self):
         """
@@ -1342,6 +1367,7 @@ class FrameLine(object):
     def execute(self, fp):
         return None
 
+
 class FrameBranch(object):
     def __init__(self, obj, base=None, profile=None):
         obj.Proxy = self
@@ -1394,11 +1420,11 @@ class FrameBranch(object):
                     # beam.MapReversed = True
 
     def redraw(self, obj):
-        temp_beam_config=list()
+        temp_beam_config = list()
         # clear all
         if obj.Beams:
             for o in obj.Beams:
-                maprev=FreeCAD.ActiveDocument.getObject(o).MapReversed
+                maprev = FreeCAD.ActiveDocument.getObject(o).MapReversed
                 temp_beam_config.append(maprev)
                 FreeCAD.ActiveDocument.removeObject(o)
         # create new beams
@@ -1450,6 +1476,7 @@ class FrameBranch(object):
         b[i] = ""
         obj.Beams = b
 
+
 class ViewProviderFrameBranch:
     def __init__(self, vobj):
         vobj.Proxy = self
@@ -1491,16 +1518,16 @@ class ViewProviderFrameBranch:
 
     def onDelete(self, feature, subelements):  # subelements is a tuple of strings
         return True
-    
+
     def onChanged(self, vobj, prop):
-            if prop == "Visibility":
-                # Sincroniza la visibilidad con todas las vigas
-                new_state = vobj.Visibility
-                if hasattr(self.Object, 'Beams'):
-                    for b in self.Object.Beams:
-                        obj=FreeCAD.ActiveDocument.getObject(b)
-                        if obj and hasattr(obj, 'ViewObject'):
-                            obj.ViewObject.Visibility = new_state
+        if prop == "Visibility":
+            # Sincroniza la visibilidad con todas las vigas
+            new_state = vobj.Visibility
+            if hasattr(self.Object, "Beams"):
+                for b in self.Object.Beams:
+                    obj = FreeCAD.ActiveDocument.getObject(b)
+                    if obj and hasattr(obj, "ViewObject"):
+                        obj.ViewObject.Visibility = new_state
 
 
 ######### customArchProfile ############
@@ -1508,9 +1535,10 @@ class ViewProviderFrameBranch:
 import Draft
 from FreeCAD import Vector
 
-def doProfile(typeS="RH", label="Square", dims=[50, 100, 5])->FreeCAD.DocumentObject:
+
+def doProfile(typeS="RH", label="Square", dims=[50, 100, 5]) -> FreeCAD.DocumentObject:
     "doProfile(typeS, label, dims)"
-    if typeS in ["RH", "R", "H", "U", "L", "T","TSLOT", "Z", "omega", "circle"]:
+    if typeS in ["RH", "R", "H", "U", "L", "T", "TSLOT", "Z", "omega", "circle"]:
         profile = [0, "SECTION", label, typeS] + dims  # for py2.6 versions
         obj = FreeCAD.ActiveDocument.addObject("Part::Part2DObjectPython", profile[2])  # FIXME:
         if profile[3] == "RH":
@@ -1543,7 +1571,8 @@ def doProfile(typeS="RH", label="Square", dims=[50, 100, 5])->FreeCAD.DocumentOb
     else:
         FreeCAD.Console.PrintError("Not such section!\n")
 
-def drawAndCenter(points:list[Vector])->Part.Face:
+
+def drawAndCenter(points: list[Vector]) -> Part.Face:
     """
     Create a Face from a given list of vectors
     """
@@ -1558,7 +1587,7 @@ def drawAndCenter(points:list[Vector])->Part.Face:
 ############ pointsXXX() functions #################
 
 
-def pointsH(H:float, W:float, D:float, t1:float, t2:float, t3:float)->list[Vector]:
+def pointsH(H: float, W: float, D: float, t1: float, t2: float, t3: float) -> list[Vector]:
     p1 = Vector(0, 0, 0)
     p2 = Vector(W, 0, 0)
     p3 = Vector(W, t2, 0)
@@ -1573,7 +1602,8 @@ def pointsH(H:float, W:float, D:float, t1:float, t2:float, t3:float)->list[Vecto
     p12 = Vector(0, t2, 0)
     return [p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p1]
 
-def pointL(H:float, W:float, t1:float, t2:float)->list[Vector]:
+
+def pointL(H: float, W: float, t1: float, t2: float) -> list[Vector]:
     p1 = Vector(-W / 2, -H / 2, 0)
     p2 = Vector(W / 2, -H / 2, 0)
     p3 = Vector(W / 2, H / 2, 0)
@@ -1582,7 +1612,8 @@ def pointL(H:float, W:float, t1:float, t2:float)->list[Vector]:
     p6 = Vector(-W / 2, t2 - H / 2, 0)
     return [p1, p2, p3, p4, p5, p6, p1]
 
-def pointsLWithRound(A:float, B:float, t:float, r1:float, r2:float)->list[Vector]:
+
+def pointsLWithRound(A: float, B: float, t: float, r1: float, r2: float) -> list[Vector]:
     x1 = r2 * (1 - 1 / sqrt(2))
     x2 = r2 - x1
     y1 = r1 * (1 - 1 / sqrt(2))
@@ -1603,7 +1634,10 @@ def pointsLWithRound(A:float, B:float, t:float, r1:float, r2:float)->list[Vector
     p12 = Vector(B, 0, 0)
     return [p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p1]
 
-def pointsChannelWithRound(H:float, B:float, t1:float, t2:float, r1:float, r2:float, Cy:float, s0:float)->list[Vector]:
+
+def pointsChannelWithRound(
+    H: float, B: float, t1: float, t2: float, r1: float, r2: float, Cy: float, s0: float
+) -> list[Vector]:
     s5 = radians(s0)
     s45 = radians(45)
     y1 = r2 * cos(s45)
@@ -1644,7 +1678,8 @@ def pointsChannelWithRound(H:float, B:float, t1:float, t2:float, r1:float, r2:fl
     p16 = Vector(B, 0, 0)
     return [p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15, p16, p1]
 
-def pointsOmega(H:float, W:float, D:float, t1:float, t2:float, t3:float)->list[Vector]:
+
+def pointsOmega(H: float, W: float, D: float, t1: float, t2: float, t3: float) -> list[Vector]:
     p1 = Vector(0, 0, 0)
     p2 = Vector(W, 0, 0)
     p3 = Vector(W, H - t3, 0)
@@ -1659,7 +1694,8 @@ def pointsOmega(H:float, W:float, D:float, t1:float, t2:float, t3:float)->list[V
     p12 = Vector(0, H - t3, 0)
     return [p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p1]
 
-def pointsT(H:float, W:float, t1:float, t2:float)->list[Vector]:
+
+def pointsT(H: float, W: float, t1: float, t2: float) -> list[Vector]:
     p1 = Vector(-W / 2, -H / 2, 0)
     p2 = Vector(W / 2, -H / 2, 0)
     p3 = Vector(W / 2, (-H / 2) + t2, 0)
@@ -1670,7 +1706,8 @@ def pointsT(H:float, W:float, t1:float, t2:float)->list[Vector]:
     p8 = Vector(-W / 2, (-H / 2) + t2, 0)
     return [p1, p2, p3, p4, p5, p6, p7, p8, p1]
 
-def pointsU(H:float, W:float, D:float, t1:float, t2:float, t3:float)->list[Vector]:
+
+def pointsU(H: float, W: float, D: float, t1: float, t2: float, t3: float) -> list[Vector]:
     p1 = Vector(0, 0, 0)
     p2 = Vector(W, 0, 0)
     p3 = Vector(W, H, 0)
@@ -1681,7 +1718,8 @@ def pointsU(H:float, W:float, D:float, t1:float, t2:float, t3:float)->list[Vecto
     p8 = Vector(0, t2, 0)
     return [p1, p2, p3, p4, p5, p6, p7, p8, p1]
 
-def pointsZ(H:float, W:float, t1:float, t2:float)->list[Vector]:
+
+def pointsZ(H: float, W: float, t1: float, t2: float) -> list[Vector]:
     p1 = Vector(-t1 / 2, -W / 2, 0)
     p2 = Vector(-t1 / 2, (W / 2) - t2, 0)
     p3 = Vector(t1 / 2 - H, (W / 2) - t2, 0)
@@ -1692,9 +1730,10 @@ def pointsZ(H:float, W:float, t1:float, t2:float)->list[Vector]:
     p8 = Vector(H - t1 / 2, -W / 2, 0)
     return [p1, p8, p7, p6, p5, p4, p3, p2, p1]
 
-def pointsTSLOT(H:float, W:float, slot_width:float, slot_depth:float):
-    #TODO:
-    Polivect =[]
+
+def pointsTSLOT(H: float, W: float, slot_width: float, slot_depth: float):
+    # TODO:
+    Polivect = []
     Polivect.append(Vector(0, 2.1, 0))
     Polivect.append(Vector(0, 3.8, 0))
     Polivect.append(Vector(2.74, 3.8, 0))
@@ -1703,7 +1742,7 @@ def pointsTSLOT(H:float, W:float, slot_width:float, slot_depth:float):
     Polivect.append(Vector(2.63, 8.5, 0))
     Polivect.append(Vector(2.63, 10, 0))
     Polivect.append(Vector(10, 10, 0))
-    Polivect.append(Vector(10,2.63,0))
+    Polivect.append(Vector(10, 2.63, 0))
     Polivect.append(Vector(8.5, 2.63, 0))
     Polivect.append(Vector(8.5, 6, 0))
     Polivect.append(Vector(7.06, 6, 0))
@@ -1711,7 +1750,8 @@ def pointsTSLOT(H:float, W:float, slot_width:float, slot_depth:float):
     Polivect.append(Vector(3.8, 0, 0))
     Polivect.append(Vector(2.1, 0, 0))
     return [px for px in Polivect]
-    
+
+
 ########### _ ProfileXXX() classes ###############
 
 # class _Profile(Draft._DraftObject):
@@ -1726,7 +1766,7 @@ from ArchProfile import _Profile
 class _ProfileRH(_Profile):
     """A parametric Rectangular hollow beam profile. Profile data: [width, height, thickness]"""
 
-    def __init__(self, obj:FreeCAD.DocumentObject, profile:list[str])->None:
+    def __init__(self, obj: FreeCAD.DocumentObject, profile: list[str]) -> None:
         obj.Label = translate("Objects", "Rectangular hollow", "Profile name in the Tree View")
         obj.addProperty(
             "App::PropertyString",
@@ -1760,7 +1800,7 @@ class _ProfileRH(_Profile):
         ).t2 = profile[7]
         _Profile.__init__(self, obj, profile)
 
-    def execute(self, obj:FreeCAD.DocumentObject)->None:
+    def execute(self, obj: FreeCAD.DocumentObject) -> None:
         W, H, t1, t2 = obj.W.Value, obj.H.Value, obj.t1.Value, obj.t2.Value
         p1 = Vector(-W / 2, -H / 2, 0)
         p2 = Vector(W / 2, -H / 2, 0)
@@ -1774,11 +1814,14 @@ class _ProfileRH(_Profile):
         q = Part.makePolygon([q1, q2, q3, q4, q1])
         obj.Shape = Part.Face(p).cut(Part.Face(q))
 
+
 class _ProfileTSLOT(_Profile):
     """A parametric Rectangular hollow beam profile. Profile data: [width, height, thickness]"""
 
-    def __init__(self, obj:FreeCAD.DocumentObject, profile:list[str])->None:
-        obj.Label = translate("Objects", "Rectangular t-slot profile", "Profile name in the Tree View")
+    def __init__(self, obj: FreeCAD.DocumentObject, profile: list[str]) -> None:
+        obj.Label = translate(
+            "Objects", "Rectangular t-slot profile", "Profile name in the Tree View"
+        )
         obj.addProperty(
             "App::PropertyString",
             "FType",
@@ -1811,14 +1854,15 @@ class _ProfileTSLOT(_Profile):
         ).slot_depth = profile[7]
         _Profile.__init__(self, obj, profile)
 
-    def execute(self, obj:FreeCAD.DocumentObject)->None:
+    def execute(self, obj: FreeCAD.DocumentObject) -> None:
         W, H, t1, t2 = obj.W.Value, obj.H.Value, obj.slot_width.Value, obj.slot_depth.Value
-        obj.Shape = drawAndCenter(pointsTSLOT(H,W,slot_width,slot_depth))
-        
+        obj.Shape = drawAndCenter(pointsTSLOT(H, W, slot_width, slot_depth))
+
+
 class _ProfileR(_Profile):
     """A parametric Rectangular solid beam profile. Profile data: [width, height]"""
 
-    def __init__(self, obj:FreeCAD.DocumentObject, profile:list[str])->None:
+    def __init__(self, obj: FreeCAD.DocumentObject, profile: list[str]) -> None:
         obj.Label = translate("Objects", "Rectangular solid", "Profile name in the Tree View")
         obj.addProperty(
             "App::PropertyString",
@@ -1840,7 +1884,7 @@ class _ProfileR(_Profile):
         ).H = profile[5]
         _Profile.__init__(self, obj, profile)
 
-    def execute(self, obj:FreeCAD.DocumentObject)->None:
+    def execute(self, obj: FreeCAD.DocumentObject) -> None:
         W, H = obj.W.Value, obj.H.Value
         p1 = Vector(-W / 2, -H / 2, 0)
         p2 = Vector(W / 2, -H / 2, 0)
@@ -1849,13 +1893,14 @@ class _ProfileR(_Profile):
         p = Part.makePolygon([p1, p2, p3, p4, p1])
         obj.Shape = Part.Face(p)
 
+
 class _ProfileCircle(_Profile):
     """A parametric circular beam profile.
     Profile data:
       D: diameter
       t1: thickness (optional; "0" for solid section)"""
 
-    def __init__(self, obj:FreeCAD.DocumentObject, profile:list[str])->None:
+    def __init__(self, obj: FreeCAD.DocumentObject, profile: list[str]) -> None:
         obj.Label = translate("Objects", "Circle-profile", "Profile name in the Tree View")
         obj.addProperty(
             "App::PropertyString",
@@ -1877,7 +1922,7 @@ class _ProfileCircle(_Profile):
         ).t1 = profile[5]
         _Profile.__init__(self, obj, profile)
 
-    def execute(self, obj:FreeCAD.DocumentObject)->None:
+    def execute(self, obj: FreeCAD.DocumentObject) -> None:
         D, t1 = obj.D.Value, obj.t1.Value
         if not t1:
             obj.Shape = Part.makeFace([Part.makeCircle(D / 2)], "Part::FaceMakerSimple")
@@ -1886,10 +1931,11 @@ class _ProfileCircle(_Profile):
             c2 = Part.makeFace([Part.makeCircle(D / 2 - t1)], "Part::FaceMakerSimple")
             obj.Shape = c1.cut(c2)
 
+
 class _ProfileL(_Profile):
     """A parametric L beam profile. Profile data: [width, height, web thickness]"""
 
-    def __init__(self, obj:FreeCAD.DocumentObject, profile:list[str])->None:
+    def __init__(self, obj: FreeCAD.DocumentObject, profile: list[str]) -> None:
         obj.addProperty(
             "App::PropertyString",
             "FType",
@@ -1922,9 +1968,10 @@ class _ProfileL(_Profile):
         ).t2 = profile[7]
         _Profile.__init__(self, obj, profile)
 
-    def execute(self, obj:FreeCAD.DocumentObject)->None:
+    def execute(self, obj: FreeCAD.DocumentObject) -> None:
         W, H, t1, t2 = obj.W.Value, obj.H.Value, obj.t1.Value, obj.t2.Value
         obj.Shape = drawAndCenter(pointsL(H, W, t1, t2))
+
 
 class _ProfileAngle(_Profile):
     """
@@ -1932,11 +1979,12 @@ class _ProfileAngle(_Profile):
     obj: _Profile object
     profile: list of profile parameters
     """
-    def __init__(self, obj:FreeCAD.DocumentObject, profile:list[str])->None:
+
+    def __init__(self, obj: FreeCAD.DocumentObject, profile: list[str]) -> None:
         ## Profile name
         self.label = obj.Name
         # FIXME: <class 'AttributeError'>: 'FeaturePython' object has no attribute 'size'
-        
+
         ## Profile size base on .csv semantic
         self.size = FreeCAD.ActiveDocument.getObject(self.label).size
         ## Profile proportion type
@@ -1989,7 +2037,7 @@ class _ProfileAngle(_Profile):
         ).r2 = float(self.sa[4])
         _Profile.__init__(self, obj, profile)
 
-    def execute(self, obj:FreeCAD.DocumentObject)->None:
+    def execute(self, obj: FreeCAD.DocumentObject) -> None:
         """
         Modify provided object based on profile list parameters
         """
@@ -2006,8 +2054,9 @@ class _ProfileAngle(_Profile):
         obj.B = B
         obj.Shape = drawAndCenter(pointsLWithRound(A, B, t, r1, r2))
 
+
 class _ProfileChannel(_Profile):
-    def __init__(self, obj:FreeCAD.DocumentObject, profile:list[str])->None:
+    def __init__(self, obj: FreeCAD.DocumentObject, profile: list[str]) -> None:
         self.label = obj.Name
         # FIXME: <class 'AttributeError'>: 'FeaturePython' object has no attribute 'size'
         self.size = FreeCAD.ActiveDocument.getObject(self.label).size
@@ -2061,7 +2110,7 @@ class _ProfileChannel(_Profile):
         ).r2 = float(self.sa[4])
         _Profile.__init__(self, obj, profile)
 
-    def execute(self, obj:FreeCAD.DocumentObject)->None:
+    def execute(self, obj: FreeCAD.DocumentObject) -> None:
         H = float(self.sa[0])
         B = float(self.sa[1])
         t1 = float(self.sa[2])
@@ -2076,10 +2125,11 @@ class _ProfileChannel(_Profile):
         obj.B = B
         obj.Shape = drawAndCenter(pointsChannelWithRound(H, B, t1, self.t2, r1, r2, Cy, self.s0))
 
+
 class _ProfileT(_Profile):
     """A parametric T beam profile. Profile data: [width, height, web thickness]"""
 
-    def __init__(self, obj:FreeCAD.DocumentObject, profile:list[str])->None:
+    def __init__(self, obj: FreeCAD.DocumentObject, profile: list[str]) -> None:
         obj.Label = translate("Objects", "T-profile", "Profile name in the Tree View")
         obj.addProperty(
             "App::PropertyString",
@@ -2113,14 +2163,15 @@ class _ProfileT(_Profile):
         ).t2 = profile[7]
         _Profile.__init__(self, obj, profile)
 
-    def execute(self, obj:FreeCAD.DocumentObject)->None:
+    def execute(self, obj: FreeCAD.DocumentObject) -> None:
         W, H, t1, t2 = obj.W.Value, obj.H.Value, obj.t1.Value, obj.t2.Value
         obj.Shape = drawAndCenter(pointsT(H, W, t1, t2))
+
 
 class _ProfileZ(_Profile):
     """A parametric Z beam profile. Profile data: [width, height, web thickness, flange thickness]"""
 
-    def __init__(self, obj:FreeCAD.DocumentObject, profile:list[str])->None:
+    def __init__(self, obj: FreeCAD.DocumentObject, profile: list[str]) -> None:
         obj.Label = translate("Objects", "Z-profile", "Profile name in the Tree View")
         obj.addProperty(
             "App::PropertyString",
@@ -2154,14 +2205,15 @@ class _ProfileZ(_Profile):
         ).t2 = profile[7]
         _Profile.__init__(self, obj, profile)
 
-    def execute(self, obj:FreeCAD.DocumentObject)->None:
+    def execute(self, obj: FreeCAD.DocumentObject) -> None:
         W, H, t1, t2 = obj.W.Value, obj.H.Value, obj.t1.Value, obj.t2.Value
         obj.Shape = drawAndCenter(pointsZ(H, W, t1, t2))
+
 
 class _ProfileOmega(_Profile):
     """A parametric omega beam profile. Profile data: [W, H, D, t1,t2,t3]"""
 
-    def __init__(self, obj:FreeCAD.DocumentObject, profile:list[str]):
+    def __init__(self, obj: FreeCAD.DocumentObject, profile: list[str]):
         obj.Label = translate("Objects", "Omega-profile", "Profile name in the Tree View")
         obj.addProperty(
             "App::PropertyString",
@@ -2207,7 +2259,7 @@ class _ProfileOmega(_Profile):
         ).t3 = profile[9]
         _Profile.__init__(self, obj, profile)
 
-    def execute(self, obj:FreeCAD.DocumentObject)->None:
+    def execute(self, obj: FreeCAD.DocumentObject) -> None:
         W, H, D, t1, t2, t3 = (
             obj.W.Value,
             obj.H.Value,
@@ -2218,10 +2270,11 @@ class _ProfileOmega(_Profile):
         )
         obj.Shape = drawAndCenter(pointsOmega(H, W, D, t1, t2, t3))
 
+
 class _ProfileH(_Profile):
     """A parametric omega beam profile. Profile data: [W, H, D, t1,t2,t3]"""
 
-    def __init__(self, obj:FreeCAD.DocumentObject, profile:list[str]):
+    def __init__(self, obj: FreeCAD.DocumentObject, profile: list[str]):
         obj.Label = translate("Objects", "H-profile", "Profile name in the Tree View")
         obj.addProperty(
             "App::PropertyString",
@@ -2267,7 +2320,7 @@ class _ProfileH(_Profile):
         ).t3 = profile[9]
         _Profile.__init__(self, obj, profile)
 
-    def execute(self, obj:FreeCAD.DocumentObject)->None:
+    def execute(self, obj: FreeCAD.DocumentObject) -> None:
         W, H, D, t1, t2, t3 = (
             obj.W.Value,
             obj.H.Value,
@@ -2278,10 +2331,11 @@ class _ProfileH(_Profile):
         )
         obj.Shape = drawAndCenter(pointsH(H, W, D, t1, t2, t3))
 
+
 class _ProfileU(_Profile):
     """A parametric U beam profile. Profile data: [W, H, D, t1,t2,t3]"""
 
-    def __init__(self, obj:FreeCAD.DocumentObject, profile:list[str]):
+    def __init__(self, obj: FreeCAD.DocumentObject, profile: list[str]):
         obj.addProperty(
             "App::PropertyString",
             "FType",
@@ -2326,7 +2380,7 @@ class _ProfileU(_Profile):
         ).t3 = profile[9]
         _Profile.__init__(self, obj, profile)
 
-    def execute(self, obj:FreeCAD.DocumentObject)->None:
+    def execute(self, obj: FreeCAD.DocumentObject) -> None:
         W, H, D, t1, t2, t3 = (
             obj.W.Value,
             obj.H.Value,
@@ -2336,32 +2390,45 @@ class _ProfileU(_Profile):
             obj.t3.Value,
         )
         obj.Shape = drawAndCenter(pointsU(H, W, D, t1, t2, t3))
+
+
 # ─────────────────────────────────────────────────────────────
 # Beam — a structural section object modelled after pypeType
 # ─────────────────────────────────────────────────────────────
+
 
 class beamType(object):
     """Base class shared by all Beam objects."""
 
     def __init__(self, obj):
         obj.addProperty(
-            "App::PropertyString", "FType", "BBase",
+            "App::PropertyString",
+            "FType",
+            "BBase",
             QT_TRANSLATE_NOOP("App::Property", "Type of frameFeature"),
         )
         obj.addProperty(
-            "App::PropertyString", "FRating", "BBase",
+            "App::PropertyString",
+            "FRating",
+            "BBase",
             QT_TRANSLATE_NOOP("App::Property", "Section standard / rating"),
         )
         obj.addProperty(
-            "App::PropertyString", "SSize", "BBase",
+            "App::PropertyString",
+            "SSize",
+            "BBase",
             QT_TRANSLATE_NOOP("App::Property", "Section designation"),
         )
         obj.addProperty(
-            "App::PropertyVectorList", "Ports", "BBase",
+            "App::PropertyVectorList",
+            "Ports",
+            "BBase",
             QT_TRANSLATE_NOOP("App::Property", "Port positions in local coordinates"),
         )
         obj.addProperty(
-            "App::PropertyVectorList", "PortDirections", "BBase",
+            "App::PropertyVectorList",
+            "PortDirections",
+            "BBase",
             QT_TRANSLATE_NOOP("App::Property", "Port outward direction vectors"),
         )
         if FREECADVERSION > 0.19:
@@ -2372,6 +2439,7 @@ class beamType(object):
 
     def execute(self, fp):
         fp.positionBySupport()
+
 
 class Beam(beamType):
     """
@@ -2406,27 +2474,39 @@ class Beam(beamType):
         obj.SSize = SSize
 
         obj.addProperty(
-            "App::PropertyString", "stype", "Beam",
+            "App::PropertyString",
+            "stype",
+            "Beam",
             QT_TRANSLATE_NOOP("App::Property", "Profile type code"),
         ).stype = stype
         obj.addProperty(
-            "App::PropertyLength", "H", "Beam",
+            "App::PropertyLength",
+            "H",
+            "Beam",
             QT_TRANSLATE_NOOP("App::Property", "Section height"),
         ).H = H
         obj.addProperty(
-            "App::PropertyLength", "W", "Beam",
+            "App::PropertyLength",
+            "W",
+            "Beam",
             QT_TRANSLATE_NOOP("App::Property", "Section width"),
         ).W = W
         obj.addProperty(
-            "App::PropertyLength", "ta", "Beam",
+            "App::PropertyLength",
+            "ta",
+            "Beam",
             QT_TRANSLATE_NOOP("App::Property", "Web / wall thickness"),
         ).ta = ta
         obj.addProperty(
-            "App::PropertyLength", "tf", "Beam",
+            "App::PropertyLength",
+            "tf",
+            "Beam",
             QT_TRANSLATE_NOOP("App::Property", "Flange thickness"),
         ).tf = tf
         obj.addProperty(
-            "App::PropertyLength", "Height", "Beam",
+            "App::PropertyLength",
+            "Height",
+            "Beam",
             QT_TRANSLATE_NOOP("App::Property", "Beam length"),
         ).Height = Height
 
@@ -2450,29 +2530,33 @@ class Beam(beamType):
             # Solid rectangle
             pts = [
                 FreeCAD.Vector(-W / 2, -H / 2, 0),
-                FreeCAD.Vector( W / 2, -H / 2, 0),
-                FreeCAD.Vector( W / 2,  H / 2, 0),
-                FreeCAD.Vector(-W / 2,  H / 2, 0),
+                FreeCAD.Vector(W / 2, -H / 2, 0),
+                FreeCAD.Vector(W / 2, H / 2, 0),
+                FreeCAD.Vector(-W / 2, H / 2, 0),
                 FreeCAD.Vector(-W / 2, -H / 2, 0),
             ]
             return face(pts)
 
         elif stype == "RH":
             # Hollow rectangular / square hollow section
-            outer = Part.makePolygon([
-                FreeCAD.Vector(-W / 2, -H / 2, 0),
-                FreeCAD.Vector( W / 2, -H / 2, 0),
-                FreeCAD.Vector( W / 2,  H / 2, 0),
-                FreeCAD.Vector(-W / 2,  H / 2, 0),
-                FreeCAD.Vector(-W / 2, -H / 2, 0),
-            ])
-            inner = Part.makePolygon([
-                FreeCAD.Vector(-(W / 2 - ta), -(H / 2 - ta), 0),
-                FreeCAD.Vector( (W / 2 - ta), -(H / 2 - ta), 0),
-                FreeCAD.Vector( (W / 2 - ta),  (H / 2 - ta), 0),
-                FreeCAD.Vector(-(W / 2 - ta),  (H / 2 - ta), 0),
-                FreeCAD.Vector(-(W / 2 - ta), -(H / 2 - ta), 0),
-            ])
+            outer = Part.makePolygon(
+                [
+                    FreeCAD.Vector(-W / 2, -H / 2, 0),
+                    FreeCAD.Vector(W / 2, -H / 2, 0),
+                    FreeCAD.Vector(W / 2, H / 2, 0),
+                    FreeCAD.Vector(-W / 2, H / 2, 0),
+                    FreeCAD.Vector(-W / 2, -H / 2, 0),
+                ]
+            )
+            inner = Part.makePolygon(
+                [
+                    FreeCAD.Vector(-(W / 2 - ta), -(H / 2 - ta), 0),
+                    FreeCAD.Vector((W / 2 - ta), -(H / 2 - ta), 0),
+                    FreeCAD.Vector((W / 2 - ta), (H / 2 - ta), 0),
+                    FreeCAD.Vector(-(W / 2 - ta), (H / 2 - ta), 0),
+                    FreeCAD.Vector(-(W / 2 - ta), -(H / 2 - ta), 0),
+                ]
+            )
             return Part.Face([outer, inner])
 
         elif stype == "H":
@@ -2481,19 +2565,19 @@ class Beam(beamType):
             hw = H / 2
             ww = W / 2
             pts = [
-                FreeCAD.Vector(-ww,       -hw,       0),
-                FreeCAD.Vector( ww,       -hw,       0),
-                FreeCAD.Vector( ww,       -hw + tf,  0),
-                FreeCAD.Vector( ta / 2,   -hw + tf,  0),
-                FreeCAD.Vector( ta / 2,    hw - tf,  0),
-                FreeCAD.Vector( ww,        hw - tf,  0),
-                FreeCAD.Vector( ww,        hw,       0),
-                FreeCAD.Vector(-ww,        hw,       0),
-                FreeCAD.Vector(-ww,        hw - tf,  0),
-                FreeCAD.Vector(-ta / 2,    hw - tf,  0),
-                FreeCAD.Vector(-ta / 2,   -hw + tf,  0),
-                FreeCAD.Vector(-ww,       -hw + tf,  0),
-                FreeCAD.Vector(-ww,       -hw,       0),
+                FreeCAD.Vector(-ww, -hw, 0),
+                FreeCAD.Vector(ww, -hw, 0),
+                FreeCAD.Vector(ww, -hw + tf, 0),
+                FreeCAD.Vector(ta / 2, -hw + tf, 0),
+                FreeCAD.Vector(ta / 2, hw - tf, 0),
+                FreeCAD.Vector(ww, hw - tf, 0),
+                FreeCAD.Vector(ww, hw, 0),
+                FreeCAD.Vector(-ww, hw, 0),
+                FreeCAD.Vector(-ww, hw - tf, 0),
+                FreeCAD.Vector(-ta / 2, hw - tf, 0),
+                FreeCAD.Vector(-ta / 2, -hw + tf, 0),
+                FreeCAD.Vector(-ww, -hw + tf, 0),
+                FreeCAD.Vector(-ww, -hw, 0),
             ]
             return face(pts)
 
@@ -2501,42 +2585,42 @@ class Beam(beamType):
             # Channel / C section (open to +X side), centred on centroid approx
             pts = [
                 FreeCAD.Vector(-W / 2, -H / 2, 0),
-                FreeCAD.Vector( W / 2, -H / 2, 0),
-                FreeCAD.Vector( W / 2, -H / 2 + tf, 0),
+                FreeCAD.Vector(W / 2, -H / 2, 0),
+                FreeCAD.Vector(W / 2, -H / 2 + tf, 0),
                 FreeCAD.Vector(-W / 2 + ta, -H / 2 + tf, 0),
-                FreeCAD.Vector(-W / 2 + ta,  H / 2 - tf, 0),
-                FreeCAD.Vector( W / 2,       H / 2 - tf, 0),
-                FreeCAD.Vector( W / 2,       H / 2,      0),
-                FreeCAD.Vector(-W / 2,       H / 2,      0),
-                FreeCAD.Vector(-W / 2,      -H / 2,      0),
+                FreeCAD.Vector(-W / 2 + ta, H / 2 - tf, 0),
+                FreeCAD.Vector(W / 2, H / 2 - tf, 0),
+                FreeCAD.Vector(W / 2, H / 2, 0),
+                FreeCAD.Vector(-W / 2, H / 2, 0),
+                FreeCAD.Vector(-W / 2, -H / 2, 0),
             ]
             return face(pts)
 
         elif stype == "L":
             # Angle section, corner at origin
             pts = [
-                FreeCAD.Vector(0,    0,   0),
-                FreeCAD.Vector(W,    0,   0),
-                FreeCAD.Vector(W,    tf,  0),
-                FreeCAD.Vector(ta,   tf,  0),
-                FreeCAD.Vector(ta,   H,   0),
-                FreeCAD.Vector(0,    H,   0),
-                FreeCAD.Vector(0,    0,   0),
+                FreeCAD.Vector(0, 0, 0),
+                FreeCAD.Vector(W, 0, 0),
+                FreeCAD.Vector(W, tf, 0),
+                FreeCAD.Vector(ta, tf, 0),
+                FreeCAD.Vector(ta, H, 0),
+                FreeCAD.Vector(0, H, 0),
+                FreeCAD.Vector(0, 0, 0),
             ]
             return face(pts)
 
         elif stype == "T":
             # T section, centred on flange
             pts = [
-                FreeCAD.Vector(-W / 2,  0,      0),
-                FreeCAD.Vector( W / 2,  0,      0),
-                FreeCAD.Vector( W / 2,  tf,     0),
-                FreeCAD.Vector( ta / 2, tf,     0),
-                FreeCAD.Vector( ta / 2, H,      0),
-                FreeCAD.Vector(-ta / 2, H,      0),
-                FreeCAD.Vector(-ta / 2, tf,     0),
-                FreeCAD.Vector(-W / 2,  tf,     0),
-                FreeCAD.Vector(-W / 2,  0,      0),
+                FreeCAD.Vector(-W / 2, 0, 0),
+                FreeCAD.Vector(W / 2, 0, 0),
+                FreeCAD.Vector(W / 2, tf, 0),
+                FreeCAD.Vector(ta / 2, tf, 0),
+                FreeCAD.Vector(ta / 2, H, 0),
+                FreeCAD.Vector(-ta / 2, H, 0),
+                FreeCAD.Vector(-ta / 2, tf, 0),
+                FreeCAD.Vector(-W / 2, tf, 0),
+                FreeCAD.Vector(-W / 2, 0, 0),
             ]
             return face(pts)
 
@@ -2547,9 +2631,9 @@ class Beam(beamType):
             )
             pts = [
                 FreeCAD.Vector(-W / 2, -H / 2, 0),
-                FreeCAD.Vector( W / 2, -H / 2, 0),
-                FreeCAD.Vector( W / 2,  H / 2, 0),
-                FreeCAD.Vector(-W / 2,  H / 2, 0),
+                FreeCAD.Vector(W / 2, -H / 2, 0),
+                FreeCAD.Vector(W / 2, H / 2, 0),
+                FreeCAD.Vector(-W / 2, H / 2, 0),
                 FreeCAD.Vector(-W / 2, -H / 2, 0),
             ]
             return face(pts)
@@ -2567,9 +2651,10 @@ class Beam(beamType):
         ]
         fp.PortDirections = [
             FreeCAD.Vector(0, 0, -1),
-            FreeCAD.Vector(0, 0,  1),
+            FreeCAD.Vector(0, 0, 1),
         ]
         super(Beam, self).execute(fp)
+
 
 class ViewProviderBeam:
     def __init__(self, vobj, icon_fn="Quetzal_InsertSection"):
@@ -2582,6 +2667,7 @@ class ViewProviderBeam:
     def attach(self, vobj):
         self.ViewObject = vobj
         self.Object = vobj.Object
+
     """
     def setEdit(self, vobj, mode):
         return False
@@ -2589,6 +2675,7 @@ class ViewProviderBeam:
     def unsetEdit(self, vobj, mode):
         return
     """
+
     def dumps(self):
         return None
 
