@@ -74,6 +74,28 @@ class insertElbow:
         }
 
 
+class insertDuctElbow:
+    def IsActive(self):
+        if FreeCAD.ActiveDocument is None:
+            return False
+        else:
+            return True
+
+    def Activated(self):
+        import pForms
+
+        pForms.insertDuctElbowForm()
+
+    def GetResources(self):
+        return {
+            "Pixmap": "Quetzal_InsertElbow",
+            "MenuText": QT_TRANSLATE_NOOP("Quetzal_InsertDuctElbow", "Insert a duct elbow"),
+            "ToolTip": QT_TRANSLATE_NOOP(
+                "Quetzal_InsertDuctElbow", Quetzal_tooltips.duct_elbow_tooltip
+            ),
+        }
+
+
 class insertTerminalAdapter:
     def IsActive(self):
         if FreeCAD.ActiveDocument is None:
@@ -114,6 +136,28 @@ class insertReduct:
             "Pixmap": "Quetzal_InsertReduct",
             "MenuText": QT_TRANSLATE_NOOP("Quetzal_InsertReduct", "Insert a reduction"),
             "ToolTip": QT_TRANSLATE_NOOP("Quetzal_InsertReduct", Quetzal_tooltips.reduct_tooltip),
+        }
+
+
+class insertDuctReduction:
+    def IsActive(self):
+        if FreeCAD.ActiveDocument is None:
+            return False
+        else:
+            return True
+
+    def Activated(self):
+        import pForms
+
+        pForms.insertDuctReductionForm()
+
+    def GetResources(self):
+        return {
+            "Pixmap": "Quetzal_InsertReduct",
+            "MenuText": QT_TRANSLATE_NOOP("Quetzal_InsertDuctReduction", "Insert a duct reduction"),
+            "ToolTip": QT_TRANSLATE_NOOP(
+                "Quetzal_InsertDuctReduction", Quetzal_tooltips.duct_reduction_tooltip
+            ),
         }
 
 
@@ -209,7 +253,7 @@ class insertUbolt:
     def GetResources(self):
         return {
             "Pixmap": "Quetzal_InsertUBolt",
-            "MenuText": QT_TRANSLATE_NOOP("Quetzal_InsertUbolt", "Insert a U-bolt"),
+            "MenuText": QT_TRANSLATE_NOOP("Quetzal_InsertUbolt", "Insert a clamp"),
             "ToolTip": QT_TRANSLATE_NOOP("Quetzal_InsertUbolt", Quetzal_tooltips.ubolt_tooltip),
         }
 
@@ -711,7 +755,9 @@ addCommand("Quetzal_InsertOutlet", insertOutlet())
 # ---------------------------------------------------------------------------
 addCommand("Quetzal_InsertPipe", insertPipe())
 addCommand("Quetzal_InsertElbow", insertElbow())
+addCommand("Quetzal_InsertDuctElbow", insertDuctElbow())
 addCommand("Quetzal_InsertReduct", insertReduct())
+addCommand("Quetzal_InsertDuctReduction", insertDuctReduction())
 addCommand("Quetzal_InsertCap", insertCap())
 addCommand("Quetzal_InsertTee", insertTee())
 addCommand("Quetzal_InsertValve", insertValve())

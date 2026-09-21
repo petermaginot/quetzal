@@ -672,6 +672,62 @@ class insertElbowForm(dodoDialogs.protoPypeForm):
     def changeSize(self, s):
         super().changeSize(s)
 
+
+class insertDuctElbowForm(dodoDialogs.protoPypeForm):
+    """Dialog to insert rectangular HVAC duct elbows."""
+
+    def __init__(self):
+        super(insertDuctElbowForm, self).__init__(
+            translate("insertDuctElbowForm", "Insert duct elbows"),
+            "DuctElbow",
+            "Rectangular",
+            "elbow.svg",
+            x,
+            y,
+        )
+        self.btn_insert.setDefault(True)
+        self.btn_insert.setFocus()
+        self.show()
+        self.lastDuctElbow = None
+
+    def fillSizes(self):
+        self.sizeList.clear()
+        self.pipeDictList = []
+        fname = "DuctElbow_" + self.PRating + ".csv"
+        fpath = join(dirname(abspath(__file__)), "tablez", fname)
+        try:
+            with open(fpath, "r", encoding="utf-8-sig") as fh:
+                self.pipeDictList = list(csv.DictReader(fh, delimiter=";"))
+        except Exception:
+            return
+
+        for row in self.pipeDictList:
+            label = "{}  {} deg  R{}".format(
+                row["PSize"], row.get("BendAngle", ""), row.get("BendRadius", "")
+            )
+            self.sizeList.addItem(label)
+
+    def insert(self):
+        idx = self.sizeList.currentIndex()
+        if idx < 0 or idx >= len(self.pipeDictList):
+            return
+        row = self.pipeDictList[idx]
+        propList = [
+            row["PSize"],
+            float(pq(row["W"])),
+            float(pq(row["H"])),
+            float(pq(row["thk"])),
+            float(pq(row["BendAngle"])),
+            float(pq(row["BendRadius"])),
+        ]
+        FreeCAD.activeDocument().openTransaction(
+            translate("Transaction", "Insert duct elbow")
+        )
+        self.lastDuctElbow = pCmd.makeDuctElbow(propList, rating=self.PRating)
+        FreeCAD.activeDocument().commitTransaction()
+        FreeCAD.activeDocument().recompute()
+
+
 class insertTeeForm(dodoDialogs.protoPypeForm):
     """
     Dialog to insert one tee (butt-weld) or socket/threaded tee.
@@ -1205,7 +1261,6 @@ class insertTerminalAdapterForm(dodoDialogs.protoPypeForm):
 
     def changeRating2(self, s):
         self.PRating = s
-        self.currentRatingLab.setText(translate("protoPypeForm", "Rating: ") + self.PRating)
         self.sizeList.blockSignals(True)
         try:
             self.fillSizes()
@@ -1542,6 +1597,68 @@ class insertFlangeForm(dodoDialogs.protoPypeForm):
     def changeSize(self, s):
         super().changeSize(s)
 
+
+class insertDuctReductionForm(dodoDialogs.protoPypeForm):
+    """Dialog to insert rectangular HVAC duct transitions/reducers."""
+
+    def __init__(self):
+        super(insertDuctReductionForm, self).__init__(
+            translate("insertDuctReductionForm", "Insert duct reductions"),
+            "DuctReduction",
+            "Rectangular",
+            "reduct.svg",
+            x,
+            y,
+        )
+        self.btn_insert.setDefault(True)
+        self.btn_insert.setFocus()
+        self.show()
+        self.lastDuctReduction = None
+
+    def fillSizes(self):
+        self.sizeList.clear()
+        self.pipeDictList = []
+        fname = "DuctReduction_" + self.PRating + ".csv"
+        fpath = join(dirname(abspath(__file__)), "tablez", fname)
+        try:
+            with open(fpath, "r", encoding="utf-8-sig") as fh:
+                self.pipeDictList = list(csv.DictReader(fh, delimiter=";"))
+        except Exception:
+            return
+
+        for row in self.pipeDictList:
+            label = "{}  L{}  off {},{}".format(
+                row["PSize"],
+                row.get("Length", ""),
+                row.get("OffsetX", "0"),
+                row.get("OffsetY", "0"),
+            )
+            self.sizeList.addItem(label)
+
+    def insert(self):
+        idx = self.sizeList.currentIndex()
+        if idx < 0 or idx >= len(self.pipeDictList):
+            return
+        row = self.pipeDictList[idx]
+        propList = [
+            row["PSize"],
+            float(pq(row["W1"])),
+            float(pq(row["H1"])),
+            float(pq(row["W2"])),
+            float(pq(row["H2"])),
+            float(pq(row["thk"])),
+            float(pq(row["Length"])),
+            float(pq(row.get("OffsetX", "0"))),
+            float(pq(row.get("OffsetY", "0"))),
+        ]
+        FreeCAD.activeDocument().openTransaction(
+            translate("Transaction", "Insert duct reduction")
+        )
+        self.lastDuctReduction = pCmd.makeDuctReduction(propList, rating=self.PRating)
+        FreeCAD.activeDocument().commitTransaction()
+        FreeCAD.activeDocument().recompute()
+
+
 class insertReductForm(dodoDialogs.protoPypeForm):
     """
     Dialog to insert concentric reductions.
@@ -1862,8 +1979,6 @@ class insertReductForm(dodoDialogs.protoPypeForm):
         if 0 <= cur_idx < len(self.pipeDictList):
             cur_psize = self.pipeDictList[cur_idx].get("PSize")
         self.PRating = s
-        self.currentRatingLab.setText(
-            translate("protoPypeForm", "Rating: ") + self.PRating)
         self.sizeList.blockSignals(True)
         try:
             self.fillSizes()
@@ -1888,7 +2003,7 @@ class insertReductForm(dodoDialogs.protoPypeForm):
 
 class insertUboltForm(dodoDialogs.protoPypeForm):
     """
-    Dialog to insert U-bolts.
+    Dialog to insert pipe clamps.
     For position and orientation you can select
       - one or more circular edges,
       - nothing.
@@ -1898,7 +2013,7 @@ class insertUboltForm(dodoDialogs.protoPypeForm):
 
     def __init__(self):
         super(insertUboltForm, self).__init__(
-            translate("insertUboltForm", "Insert U-bolt"),
+            translate("insertUboltForm", "Insert clamp"),
             "Clamp",
             "DIN-UBolt",
             "clamp.svg",
@@ -1929,6 +2044,32 @@ class insertUboltForm(dodoDialogs.protoPypeForm):
         self.refNorm = None
         self.getReference()
 
+    def _isBeamClamp(self, row):
+        return row.get("ClampFamily", "").strip().lower() == "beam" or "ProductCode" in row
+
+    def _beamClampPropList(self, row):
+        return [
+            row["PSize"],
+            row.get("ClampFamily", self.PRating),
+            row.get("ProductCode", ""),
+            row.get("Bolt", ""),
+            float(pq(row["Y"])),
+            float(pq(row["X"])),
+            float(pq(row["V"])),
+            float(pq(row["T"])),
+            float(pq(row["W"])),
+        ]
+
+    def _selectedClampPosition(self, selex):
+        for sx in selex:
+            if sx.SubObjects:
+                for sub in sx.SubObjects:
+                    if hasattr(sub, "CenterOfMass"):
+                        return sub.CenterOfMass
+            if hasattr(sx.Object, "Placement"):
+                return sx.Object.Placement.Base
+        return FreeCAD.Vector(0, 0, 0)
+
     def getReference(self):
         selex = FreeCADGui.Selection.getSelectionEx()
         for sx in selex:
@@ -1941,12 +2082,26 @@ class insertUboltForm(dodoDialogs.protoPypeForm):
 
     def insert(self):
         selex = FreeCADGui.Selection.getSelectionEx()
+        _idx = self.sizeList.currentIndex()
+        if _idx < 0 or _idx >= len(self.pipeDictList):
+            return
+        current_row = self.pipeDictList[_idx]
+        if self._isBeamClamp(current_row):
+            FreeCAD.activeDocument().openTransaction(
+                translate("Transaction", "Insert beam clamp")
+            )
+            bc = pCmd.makeBeamClamp(
+                self._beamClampPropList(current_row),
+                pos=self._selectedClampPosition(selex),
+            )
+            if self.existingObjs.currentText() != "<none>":
+                pCmd.moveToPyLi(bc, self.existingObjs.currentText())
+            FreeCAD.activeDocument().commitTransaction()
+            FreeCAD.activeDocument().recompute()
+            return
         if len(selex) == 0:
             # size_selected = self.pipeDictList[self.sizeList.currentIndex()]
-            _idx = self.sizeList.currentIndex()
-            if _idx < 0 or _idx >= len(self.pipeDictList):
-                return
-            size_selected = self.pipeDictList[_idx]
+            size_selected = current_row
             rating = self.ratingList.currentText()
             propList = [
                 size_selected["PSize"],

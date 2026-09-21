@@ -4,7 +4,7 @@ __title__ = "pypeTools objects"
 __author__ = "oddtopus"
 __url__ = "github.com/oddtopus/dodo"
 __license__ = "LGPL 3"
-objs = ["Pipe", "Elbow", "Reduct", "Cap", "Flange", "Tee", "Ubolt", "Valve"]
+objs = ["Pipe", "Elbow","DuctReduction", "DuctElbow", "Reduct", "Cap", "Flange", "Tee", "Ubolt", "Valve"]
 metaObjs = ["PypeLine", "PypeBranch"]
 
 from os.path import abspath, dirname, join
@@ -412,6 +412,141 @@ class Elbow(pypeType):
             except Part.OCCError as occer:
                 FreeCAD.Console.PrintWarning(str(occer) + "\n")
 
+
+class DuctElbow:
+    """Class for object PType="DuctElbow".
+    Rectangular radius duct elbow driven by width, height, wall thickness,
+    bend angle, and centerline bend radius.
+    """
+
+    def __init__(
+        self,
+        obj,
+        rating="Rectangular",
+        PSize="300x150",
+        W=300,
+        H=150,
+        thk=0.8,
+        BA=90,
+        BR=450,
+    ):
+        obj.Proxy = self
+        obj.addProperty(
+            "App::PropertyString",
+            "PType",
+            "DuctElbow",
+            QT_TRANSLATE_NOOP("App::Property", "Type of duct feature"),
+        ).PType = "DuctElbow"
+        obj.addProperty(
+            "App::PropertyString",
+            "PRating",
+            "DuctElbow",
+            QT_TRANSLATE_NOOP("App::Property", "Duct fitting family"),
+        ).PRating = rating
+        obj.addProperty(
+            "App::PropertyString",
+            "PSize",
+            "DuctElbow",
+            QT_TRANSLATE_NOOP("App::Property", "Nominal duct size"),
+        ).PSize = PSize
+        obj.addProperty(
+            "App::PropertyLength",
+            "W",
+            "DuctElbow",
+            QT_TRANSLATE_NOOP("App::Property", "Duct width"),
+        ).W = W
+        obj.addProperty(
+            "App::PropertyLength",
+            "H",
+            "DuctElbow",
+            QT_TRANSLATE_NOOP("App::Property", "Duct height"),
+        ).H = H
+        obj.addProperty(
+            "App::PropertyLength",
+            "thk",
+            "DuctElbow",
+            QT_TRANSLATE_NOOP("App::Property", "Wall thickness"),
+        ).thk = thk
+        obj.addProperty(
+            "App::PropertyAngle",
+            "BendAngle",
+            "DuctElbow",
+            QT_TRANSLATE_NOOP("App::Property", "Bend Angle"),
+        ).BendAngle = BA
+        obj.addProperty(
+            "App::PropertyLength",
+            "BendRadius",
+            "DuctElbow",
+            QT_TRANSLATE_NOOP("App::Property", "Centerline bend radius"),
+        ).BendRadius = BR
+        obj.addProperty(
+            "App::PropertyString",
+            "Profile",
+            "DuctElbow",
+            QT_TRANSLATE_NOOP("App::Property", "Section dim."),
+        ).Profile = str(obj.W) + "x" + str(obj.H) + "x" + str(obj.thk)
+        obj.addProperty(
+            "App::PropertyVectorList",
+            "Ports",
+            "PBase",
+            QT_TRANSLATE_NOOP("App::Property", "Ports position relative to the origin of Shape"),
+        )
+        obj.addProperty(
+            "App::PropertyVectorList",
+            "PortDirections",
+            "PBase",
+            QT_TRANSLATE_NOOP("App::Property", "Port directions relative to the origin of Shape"),
+        )
+        self.execute(obj)
+
+    def onChanged(self, fp, prop):
+        return None
+
+    def execute(self, fp):
+        from math import cos, radians, sin
+
+        width = max(float(fp.W), 1.0)
+        height = max(float(fp.H), 1.0)
+        thk = max(min(float(fp.thk), width / 2 - 0.1, height / 2 - 0.1), 0.1)
+        angle = max(min(float(fp.BendAngle), 170.0), 1.0)
+        radius = max(float(fp.BendRadius), width / 2 + thk)
+        fp.Profile = str(fp.W) + "x" + str(fp.H) + "x" + str(fp.thk)
+
+        segments = max(6, int(angle / 7.5))
+        outer_wires = []
+        inner_wires = []
+        for i in range(segments + 1):
+            a = radians(angle * i / segments)
+            center = FreeCAD.Vector(radius * sin(a), radius * (1 - cos(a)), 0)
+            radial = FreeCAD.Vector(-sin(a), cos(a), 0)
+            outer_wires.append(self._rect_wire(center, radial, vZ, width, height))
+            inner_wires.append(self._rect_wire(center, radial, vZ, width - 2 * thk, height - 2 * thk))
+
+        outer = Part.makeLoft(outer_wires, True, False, False)
+        inner = Part.makeLoft(inner_wires, True, False, False)
+        fp.Shape = outer.cut(inner)
+        fp.Ports = [
+            outer_wires[0].CenterOfMass,
+            outer_wires[-1].CenterOfMass,
+        ]
+        fp.PortDirections = [
+            FreeCAD.Vector(-1, 0, 0),
+            FreeCAD.Vector(cos(radians(angle)), sin(radians(angle)), 0),
+        ]
+
+    def _rect_wire(self, center, xdir, ydir, width, height):
+        x = xdir.normalize().multiply(width / 2)
+        y = ydir.normalize().multiply(height / 2)
+        pts = [
+            center - x - y,
+            center + x - y,
+            center + x + y,
+            center - x + y,
+            center - x - y,
+        ]
+        return Part.Wire(Part.makePolygon(pts))
+
+
 class Flange(pypeType):
     """Class for object PType="Flange"
     Flange(obj,[PSize="DN50",FlangeType="SO", D=160, d=60.3,df=132, f=14 t=15,n=4, trf=0, drf=0, twn=0, dwn=0, ODp=0])
@@ -596,19 +731,29 @@ class Flange(pypeType):
                 base = base.cut(hole)
                 hole.rotate(FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 0, 1), 360.0 / fp.n)
         # creates flange thickness
-        flange = base.extrude(FreeCAD.Vector(0, 0, fp.t)) 
-        fp.ViewObject.Deviation = 0.10
+        flange = base.extrude(FreeCAD.Vector(0, 0, fp.t))
+        # Tessellation quality is a display setting, and ViewObject is None in
+        # console mode. Setting it unguarded raised AttributeError mid-execute,
+        # which recompute swallows -- so every Flange came back with a NULL
+        # shape and no error, headless.
+        if FreeCAD.GuiUp and fp.ViewObject is not None:
+            fp.ViewObject.Deviation = 0.10
         if (
             fp.FlangeType == "SW"
             or fp.FlangeType == "WN"
             or fp.FlangeType == "LJ"
             or fp.FlangeType == "SO"
         ):
-            # creates flange neck (corrected for raised face addition)
-            nn = Part.makeCylinder(fp.ODp / 2, fp.T1, vO, vZ).cut(
-                Part.makeCylinder(fp.d / 2, fp.T1, vO, vZ)
-            )
-            flange = flange.fuse(nn)
+            # creates flange neck (corrected for raised face addition).
+            # Only when it has real dimensions: ODp/T1 are documented OPTIONAL,
+            # and building a zero-radius zero-height cylinder produced a
+            # degenerate solid that fused into an invalid shape rather than
+            # being skipped.
+            if fp.ODp > 0 and fp.T1 > 0 and fp.ODp > fp.d:
+                nn = Part.makeCylinder(fp.ODp / 2, fp.T1, vO, vZ).cut(
+                    Part.makeCylinder(fp.d / 2, fp.T1, vO, vZ)
+                )
+                flange = flange.fuse(nn)
             if fp.trf > 0 and fp.drf < fp.D:
                 rf = Part.makeCylinder(fp.drf / 2, fp.trf, vO, vZ * -1).cut(
                     Part.makeCylinder(fp.d / 2, fp.trf, vO, vZ * -1)
@@ -1039,9 +1184,13 @@ class Tee(pypeType):
                 except Exception as e:
                     # Fillet failed -- fall back to unfilleted shape rather than
                     # crashing the whole recompute
+                    # float() because fillet_r is a Base.Quantity, which has no
+                    # numeric __format__ -- the fallback that exists to avoid
+                    # crashing the recompute was itself raising TypeError and
+                    # taking the Tee down with it.
                     FreeCAD.Console.PrintWarning(
                         "Tee fillet failed (r={:.2f}mm): {} -- using unfilleted shape\n"
-                        .format(fillet_r, e)
+                        .format(float(fillet_r), e)
                     )
 
         fp.Shape = Base
@@ -1378,6 +1527,121 @@ class Reduct(pypeType):
             fp.PortDirections = [FreeCAD.Vector(0, 0, -1), FreeCAD.Vector(0, 0, 1)] #in either case, ports face +Z and -Z
         super(Reduct, self).execute(fp)  # perform common operations
 
+
+class DuctReduction:
+    """Class for object PType="DuctReduction".
+
+    Rectangular duct transition/reducer driven by inlet/outlet width and
+    height, wall thickness, transition length, and optional outlet offsets.
+    """
+
+    def __init__(
+        self,
+        obj,
+        rating="Rectangular",
+        PSize="600x300-400x200",
+        W1=600,
+        H1=300,
+        W2=400,
+        H2=200,
+        thk=1.0,
+        L=386,
+        OffsetX=0,
+        OffsetY=0,
+    ):
+        obj.Proxy = self
+        obj.addProperty(
+            "App::PropertyString",
+            "PType",
+            "DuctReduction",
+            QT_TRANSLATE_NOOP("App::Property", "Type of duct feature"),
+        ).PType = "DuctReduction"
+        obj.addProperty(
+            "App::PropertyString",
+            "PRating",
+            "DuctReduction",
+            QT_TRANSLATE_NOOP("App::Property", "Duct fitting family"),
+        ).PRating = rating
+        obj.addProperty(
+            "App::PropertyString",
+            "PSize",
+            "DuctReduction",
+            QT_TRANSLATE_NOOP("App::Property", "Nominal duct transition size"),
+        ).PSize = PSize
+        for prop, value, text in [
+            ("W1", W1, "Inlet width"),
+            ("H1", H1, "Inlet height"),
+            ("W2", W2, "Outlet width"),
+            ("H2", H2, "Outlet height"),
+            ("thk", thk, "Wall thickness"),
+            ("Height", L, "Transition length"),
+            ("OffsetX", OffsetX, "Outlet horizontal offset"),
+            ("OffsetY", OffsetY, "Outlet vertical offset"),
+        ]:
+            obj.addProperty(
+                "App::PropertyLength",
+                prop,
+                "DuctReduction",
+                QT_TRANSLATE_NOOP("App::Property", text),
+            )
+            setattr(obj, prop, value)
+        obj.addProperty(
+            "App::PropertyString",
+            "Profile",
+            "DuctReduction",
+            QT_TRANSLATE_NOOP("App::Property", "Section dim."),
+        ).Profile = str(obj.W1) + "x" + str(obj.H1) + ">" + str(obj.W2) + "x" + str(obj.H2)
+        obj.addProperty(
+            "App::PropertyVectorList",
+            "Ports",
+            "PBase",
+            QT_TRANSLATE_NOOP("App::Property", "Ports position relative to the origin of Shape"),
+        )
+        obj.addProperty(
+            "App::PropertyVectorList",
+            "PortDirections",
+            "PBase",
+            QT_TRANSLATE_NOOP("App::Property", "Port directions relative to the origin of Shape"),
+        )
+        self.execute(obj)
+
+    def onChanged(self, fp, prop):
+        return None
+
+    def execute(self, fp):
+        w1 = max(float(fp.W1), 1.0)
+        h1 = max(float(fp.H1), 1.0)
+        w2 = max(float(fp.W2), 1.0)
+        h2 = max(float(fp.H2), 1.0)
+        thk = max(min(float(fp.thk), w1 / 2 - 0.1, h1 / 2 - 0.1, w2 / 2 - 0.1, h2 / 2 - 0.1), 0.1)
+        length = max(float(fp.Height), 1.0)
+        offset = FreeCAD.Vector(float(fp.OffsetX), float(fp.OffsetY), length)
+        fp.Profile = str(fp.W1) + "x" + str(fp.H1) + ">" + str(fp.W2) + "x" + str(fp.H2)
+
+        inlet = self._rect_wire(vO, vX, vY, w1, h1)
+        outlet = self._rect_wire(offset, vX, vY, w2, h2)
+        inner_inlet = self._rect_wire(vO, vX, vY, w1 - 2 * thk, h1 - 2 * thk)
+        inner_outlet = self._rect_wire(offset, vX, vY, w2 - 2 * thk, h2 - 2 * thk)
+
+        outer = Part.makeLoft([inlet, outlet], True, False, False)
+        inner = Part.makeLoft([inner_inlet, inner_outlet], True, False, False)
+        fp.Shape = outer.cut(inner)
+        fp.Ports = [vO, offset]
+        fp.PortDirections = [FreeCAD.Vector(0, 0, -1), FreeCAD.Vector(0, 0, 1)]
+
+    def _rect_wire(self, center, xdir, ydir, width, height):
+        x = xdir.normalize().multiply(width / 2)
+        y = ydir.normalize().multiply(height / 2)
+        pts = [
+            center - x - y,
+            center + x - y,
+            center + x + y,
+            center - x + y,
+            center - x - y,
+        ]
+        return Part.Wire(Part.makePolygon(pts))
+
+
 class Cap(pypeType):
     """Class for object PType="Cap"
     Cap(obj,[PSize="DN50",OD=60.3,thk=3])
@@ -1670,6 +1934,155 @@ class Ubolt:
         path = Part.Wire([c, l1, l2])
         fp.Shape = path.makePipe(p)
         fp.Ports = [FreeCAD.Vector(0, 0, 1)] #not quite sure why a U-bolt has a port?
+
+
+class BeamClamp:
+    """Class for object PType="Clamp".
+    BeamClamp(obj,[PSize="LA037-short", ClampType="Beam", ProductCode="LA037",
+                   Bolt="M10", Y=20, X=11, V=4, T=5, W=26])
+      obj: the "App::FeaturePython" object
+      PSize (string): catalog size row
+      ClampType (string): clamp family
+      ProductCode (string): vendor product code
+      Bolt (string): nominal fastener size
+      Y, X, V, T, W (float): catalog dimensions in mm
+    """
+
+    def __init__(
+        self,
+        obj,
+        PSize="LA037-short",
+        ClampType="Beam",
+        ProductCode="LA037",
+        Bolt="M10",
+        Y=20,
+        X=11,
+        V=4,
+        T=5,
+        W=26,
+    ):
+        obj.Proxy = self
+        obj.addProperty(
+            "App::PropertyString",
+            "PType",
+            "BeamClamp",
+            QT_TRANSLATE_NOOP("App::Property", "Type of pipeFeature"),
+        ).PType = "Clamp"
+        obj.addProperty(
+            "App::PropertyString",
+            "ClampType",
+            "BeamClamp",
+            QT_TRANSLATE_NOOP("App::Property", "Type of clamp"),
+        ).ClampType = ClampType
+        obj.addProperty(
+            "App::PropertyString",
+            "PSize",
+            "BeamClamp",
+            QT_TRANSLATE_NOOP("App::Property", "Size of clamp"),
+        ).PSize = PSize
+        obj.addProperty(
+            "App::PropertyString",
+            "ProductCode",
+            "BeamClamp",
+            QT_TRANSLATE_NOOP("App::Property", "Catalog product code"),
+        ).ProductCode = ProductCode
+        obj.addProperty(
+            "App::PropertyString",
+            "Bolt",
+            "BeamClamp",
+            QT_TRANSLATE_NOOP("App::Property", "Bolt size"),
+        ).Bolt = Bolt
+        for prop, value, text in [
+            ("Y", Y, "Clamp height"),
+            ("X", X, "Clamp body length"),
+            ("V", V, "Tail length"),
+            ("T", T, "Clamp thickness"),
+            ("W", W, "Clamp width"),
+        ]:
+            obj.addProperty(
+                "App::PropertyLength",
+                prop,
+                "BeamClamp",
+                QT_TRANSLATE_NOOP("App::Property", text),
+            )
+            setattr(obj, prop, value)
+        obj.addProperty(
+            "App::PropertyVectorList",
+            "Ports",
+            "PBase",
+            QT_TRANSLATE_NOOP("App::Property", "Ports position relative to the origin of Shape"),
+        )
+        self.execute(obj)
+
+    def onChanged(self, fp, prop):
+        return None
+
+    def execute(self, fp):
+        height = float(fp.Y)
+        body_len = float(fp.X)
+        tail_len = float(fp.V)
+        thk = float(fp.T)
+        width = float(fp.W)
+        bolt_dia = self._bolt_diameter(fp.Bolt, max(height * 0.5, 1))
+
+        body = Part.makeBox(
+            body_len,
+            width,
+            height,
+            FreeCAD.Vector(-body_len / 2, -width / 2, 0),
+        )
+        tail = Part.makeBox(
+            tail_len,
+            width,
+            thk,
+            FreeCAD.Vector(body_len / 2, -width / 2, 0),
+        )
+        nose = Part.makeBox(
+            thk,
+            width,
+            thk,
+            FreeCAD.Vector(-body_len / 2 - thk, -width / 2, -thk),
+        )
+        lower_grip = Part.makeBox(
+            max(body_len * 0.45, thk),
+            width,
+            thk,
+            FreeCAD.Vector(-body_len / 2, -width / 2, -thk),
+        )
+        boss = Part.makeCylinder(
+            bolt_dia * 0.75,
+            thk,
+            FreeCAD.Vector(0, 0, height),
+            vZ,
+        )
+        clearance = Part.makeCylinder(
+            bolt_dia * 0.58,
+            height + thk * 3,
+            FreeCAD.Vector(0, 0, -thk * 1.5),
+            vZ,
+        )
+        clamp = body.fuse(tail).fuse(nose).fuse(lower_grip).fuse(boss).cut(clearance)
+        bolt = Part.makeCylinder(
+            bolt_dia * 0.42,
+            height + thk * 3,
+            FreeCAD.Vector(0, 0, -thk * 1.5),
+            vZ,
+        )
+        head = Part.makeCylinder(
+            bolt_dia * 0.85,
+            thk * 0.8,
+            FreeCAD.Vector(0, 0, height + thk),
+            vZ,
+        )
+        fp.Shape = clamp.fuse(bolt).fuse(head)
+        fp.Ports = [FreeCAD.Vector(0, 0, 0)]
+
+    def _bolt_diameter(self, bolt, fallback):
+        try:
+            return float(str(bolt).strip().upper().replace("M", ""))
+        except Exception:
+            return fallback
+
 
 class Shell:
     """
@@ -2527,6 +2940,8 @@ class Valve(pypeType):
         if fp.PRating.lower().find("pinch") + 1:
             self._execute_pinch(fp, H)
             return
+
+        rating = fp.PRating.lower()
 
         c = Part.makeCone(fp.ODBody / 2, fp.ODBody / 5, H / 2,
                           FreeCAD.Vector(0, 0, -H / 2))
@@ -3956,3 +4371,4 @@ class SocketUnion(pypeType):
             FreeCAD.Vector(0, 0,  1),
         ]
         super(SocketUnion, self).execute(fp)  # perform common operations
+

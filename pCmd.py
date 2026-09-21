@@ -633,6 +633,14 @@ def getSelectionPortAttachment(selex=None):
 
 class ViewProvider:
     def __init__(self, obj, icon_fn):
+        # In console mode DocumentObject.ViewObject is None (FreeCAD returns
+        # Py::None when FreeCADGui has no Gui::Document for the App document),
+        # so every make*() factory died here before it could return its object.
+        # Guarding once, in the provider, covers all 17 call sites and any
+        # added later -- the geometry in pFeatures is pure Part/BRep and has
+        # never needed the GUI.
+        if obj is None or not FreeCAD.GuiUp:
+            return
         obj.Proxy = self
         self._check_attr()
         self.icon_fn = get_icon_path(icon_fn or "quetzal")
@@ -844,6 +852,38 @@ def makeElbow(propList=[], pos=None, Z=None, rating="SCH-STD"):
     port0_world = a.Placement.multVec(a.Ports[0])
     a.Placement.Base = pos - port0_world
     a.Label = translate("Objects", "Elbow")
+    return a
+
+
+def makeDuctElbow(propList=[], pos=None, Z=None, rating="Rectangular"):
+    """Adds a rectangular duct elbow object.
+
+    propList is one optional list with 6 elements:
+      PSize (string): nominal duct size
+      W (float): duct width
+      H (float): duct height
+      thk (float): wall thickness
+      BendAngle (float): bend angle in degrees
+      BendRadius (float): centerline bend radius
+    """
+    if pos == None:
+        pos = FreeCAD.Vector(0, 0, 0)
+    if Z == None:
+        Z = FreeCAD.Vector(0, 0, 1)
+    a = FreeCAD.ActiveDocument.addObject("Part::FeaturePython", "Duct-Elbow")
+    if len(propList) == 6:
+        pFeatures.DuctElbow(a, rating, *propList)
+    else:
+        pFeatures.DuctElbow(a, rating)
+    if a.ViewObject:
+        ViewProvider(a.ViewObject, "Quetzal_InsertElbow")
+
+    port0_local_dir = a.PortDirections[0] if a.PortDirections else FreeCAD.Vector(0, 0, 1)
+    rot = FreeCAD.Rotation(port0_local_dir, Z)
+    a.Placement.Rotation = rot.multiply(a.Placement.Rotation)
+    port0_world = a.Placement.multVec(a.Ports[0])
+    a.Placement.Base = pos - port0_world
+    a.Label = translate("Objects", "Duct Elbow")
     return a
 
 
@@ -1236,6 +1276,36 @@ def makeReduct(propList=[], pos=None, Z=None, conc=True, smallerEnd=False, ratin
     a.Label = translate("Objects", "Reduct")
     return a
 
+
+def makeDuctReduction(propList=[], pos=None, Z=None, smallerEnd=False, rating="Rectangular"):
+    """Adds a rectangular duct transition/reducer object.
+
+    propList is one optional list with 9 elements:
+      PSize, W1, H1, W2, H2, thk, Length, OffsetX, OffsetY
+    """
+    if pos == None:
+        pos = FreeCAD.Vector(0, 0, 0)
+    if Z == None:
+        Z = FreeCAD.Vector(0, 0, 1)
+    a = FreeCAD.ActiveDocument.addObject("Part::FeaturePython", "Duct-Reduction")
+    if len(propList) == 9:
+        pFeatures.DuctReduction(a, rating, *propList)
+    else:
+        pFeatures.DuctReduction(a, rating)
+    if a.ViewObject:
+        ViewProvider(a.ViewObject, "Quetzal_InsertReduct")
+    a.Placement.Base = pos
+    rot = FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), Z)
+    a.Placement.Rotation = rot.multiply(a.Placement.Rotation)
+    if smallerEnd:
+        initPos = a.Placement.Base
+        rotateTheTubeAx(a, FreeCAD.Vector(0, 1, 0), 180)
+        finalPos = a.Placement.Base
+        a.Placement.move(initPos - finalPos)
+    a.Label = translate("Objects", "Duct Reduction")
+    return a
+
+
 def doReduct(rating="SCH-STD", propList=[], pypeline=None, pos=None, Z=None, conc=True, smallerEnd=False):
     """propList[] = 
       PSize (string): nominal diameter (major end)
@@ -1318,6 +1388,35 @@ def makeUbolt(propList=[], pos=None, Z=None):
     return a
 
 
+def makeBeamClamp(propList=[], pos=None, Z=None):
+    """Adds a beam clamp object:
+    makeBeamClamp(propList,pos,Z);
+      propList is one optional list with 9 elements:
+        PSize (string): catalog size row
+        ClampType (string): the clamp type or standard
+        ProductCode (string): vendor product code
+        Bolt (string): nominal bolt size
+        Y, X, V, T, W (float): catalog dimensions in mm
+      pos (vector): position of insertion; default = 0,0,0
+      Z (vector): orientation: default = 0,0,1
+    """
+    if pos == None:
+        pos = FreeCAD.Vector(0, 0, 0)
+    if Z == None:
+        Z = FreeCAD.Vector(0, 0, 1)
+    a = FreeCAD.ActiveDocument.addObject("Part::FeaturePython", "Beam-Clamp")
+    if len(propList) == 9:
+        pFeatures.BeamClamp(a, *propList)
+    else:
+        pFeatures.BeamClamp(a)
+    ViewProvider(a.ViewObject, "Quetzal_InsertUBolt")
+    a.Placement.Base = pos
+    rot = FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), Z)
+    a.Placement.Rotation = rot.multiply(a.Placement.Rotation)
+    a.Label = translate("Objects", "Beam Clamp")
+    return a
+
+
 def makeShell(L=1000, W=1500, H=1500, thk1=6, thk2=8):
     """
     makeShell(L,W,H,thk1,thk2)
@@ -1331,8 +1430,9 @@ def makeShell(L=1000, W=1500, H=1500, thk1=6, thk2=8):
     pFeatures.Shell(a, L, W, H, thk1, thk2)
     ViewProvider(a.ViewObject, "Quetzal_InsertTank")
     a.Placement.Base = FreeCAD.Vector(0, 0, 0)
-    a.ViewObject.ShapeColor = 0.0, 0.0, 1.0
-    a.ViewObject.Transparency = 85
+    if FreeCAD.GuiUp:
+        a.ViewObject.ShapeColor = 0.0, 0.0, 1.0
+        a.ViewObject.Transparency = 85
     FreeCAD.ActiveDocument.recompute()
     a.Label = translate("Objects", "Tank")
     return a
@@ -1593,8 +1693,9 @@ def makePypeLine2(
     if not pl:
         a = FreeCAD.ActiveDocument.addObject("Part::FeaturePython", lab)
         pFeatures.PypeLine2(a, DN, PRating, OD, thk, BR, lab)
-        pFeatures.ViewProviderPypeLine(a.ViewObject)  # a.ViewObject.Proxy=0
-        a.ViewObject.ShapeColor = color
+        if FreeCAD.GuiUp:
+            pFeatures.ViewProviderPypeLine(a.ViewObject)  # a.ViewObject.Proxy=0
+            a.ViewObject.ShapeColor = color
         if len(FreeCADGui.Selection.getSelection()) == 1:
             obj = FreeCADGui.Selection.getSelection()[0]
             isWire = hasattr(obj, "Shape") and obj.Shape.Edges  # type(obj.Shape)==Part.Wire

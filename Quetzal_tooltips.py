@@ -103,6 +103,15 @@ elbow_tooltip = (
     "\n"
 	)
 
+duct_elbow_tooltip = (
+    "Tool to insert a rectangular HVAC duct elbow\n"
+    "_________________________________________________ \n"
+    "Usage \n"
+    "Select the rectangular duct elbow family from the rating list, then select the duct size, bend angle, and radius preset.\n"
+    "Click 'Insert' to create a standalone rectangular duct radius elbow at the origin.\n"
+    "The generated object stores width, height, wall thickness, bend angle, and centerline bend radius as editable properties.\n"
+)
+
 reduct_tooltip = (
     "Tool to insert a concentric or eccentric pipe reducer\n"
     "______________________________________________________________________________________________________________________________________ \n"
@@ -124,6 +133,15 @@ reduct_tooltip = (
     "Reverse button:\n"
     "Rotates the reducer 180 degrees about its attachment port.\n"
     "\n"
+	)
+
+duct_reduction_tooltip = (
+    "Tool to insert a rectangular HVAC duct transition/reducer\n"
+    "_________________________________________________ \n"
+    "Usage \n"
+    "Select the rectangular duct reduction family from the rating list, then select the inlet/outlet size and transition length preset.\n"
+    "Click 'Insert' to create a standalone rectangular duct transition at the origin.\n"
+    "The generated object stores inlet width/height, outlet width/height, wall thickness, length, and outlet offsets as editable properties.\n"
 )
 
 cap_tooltip = (
@@ -218,14 +236,15 @@ flange_tooltip = (
 )
 
 ubolt_tooltip = (
-    "Tool to insert U-bolt pipe supports\n"
+    "Tool to insert pipe clamps\n"
     "______________________________________________________________________________________________________________________________________ \n"
     "Usage \n"
     "Select a pipe object to attach U-bolts along it \n"
     " • If a pipe object is selected, the U-bolt size is automatically matched to the pipe's nominal diameter. U-bolts may be inserted at the head (near Port 0), middle, and/or tail (near Port 1) of the pipe using the check boxes. \n"
-    " • If no objects are selected, a single U-bolt will be inserted at the origin. \n"
+    " • If no objects are selected, a single clamp will be inserted at the origin. \n"
+    " • Beam clamp rows are inserted as standalone beam clamps. If a face or object is selected, the beam clamp is placed at that selection. \n"
     "\n"
-    "In the window, select the U-bolt standard from the rating list, then select the nominal pipe size from the size list.\n"
+    "In the window, select the clamp standard from the rating list, then select the size from the size list.\n"
     "Use the check boxes to select the insertion positions along the pipe:\n"
     " • Head: inserts a U-bolt offset from Port 0 by half the U-bolt width (C dimension).\n"
     " • Middle: inserts a U-bolt at the midpoint of the pipe.\n"

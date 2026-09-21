@@ -61,6 +61,8 @@ Wiki for older Dodo and Flamingo versions of the workbench
 Discussion in the FreeCAD Forum:
 <https://forum.freecad.org/viewtopic.php?t=22711>
 
+[Drawings 2D nomeclature of tablez CVS]: ./Nomeclature.md
+
 ## Changelog
 
 Read our [CHANGELOG] file to know about the latest changes.
@@ -75,7 +77,7 @@ Here are some of the planned developments for this Workbench:
 - [ ] Icrease valve design detail
 - [ ] Add HVAC duct support.
   - [ ] Elbow
-  - [ ] Reduction
+  - [X] Reduction
   - [ ] Branch
   - [ ] Round duct
   - [ ] Square duct
@@ -100,7 +102,7 @@ Here are some of the planned developments for this Workbench:
     - [X] Pinch Valve
   - [ ] Pipe Clamping
     - [X] U-bolt clamp
-    - [ ] Beam clamp
+    - [X] Beam clamp
   - [ ] Beam joins
 - [ ] Support, if possible, International design standarts:
   - [ ] ASME B16.5 (NPS 1/2 to 24")
