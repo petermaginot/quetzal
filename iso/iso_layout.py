@@ -30,7 +30,10 @@ CLEARANCE = 3.0  # mm between segments that do not touch
 FOLD_DEG = 10.0  # edges leaving one node closer than this overlap
 K_MIN, K_MAX, K_START = 0.15, 3.5, 1.0
 ZOOM_MAX = 1.6  # largest symbol enlargement when a small line leaves room
+ZOOM_MIN = 0.6  # smallest symbol size before the whole drawing is scaled instead
 MAX_ROUNDS = 80
+MAX_STRETCH = 6.0  # a pipe is never drawn more than this many times its normal length
+CLASHES_TRIED = 6  # clashes whose tree paths supply stretch candidates each round
 MARGIN = 25.0  # room left around the line work for dimensions and balloons
 
 
@@ -271,34 +274,66 @@ def _tree_path_edges(layout, u, v):
     return [p for p in path if p is not None]
 
 
-def resolve_clashes(layout):
-    """Stretch pipes until nothing clashes, or MAX_ROUNDS is reached."""
+STRETCHABLE = ("pipe", "olet", "leg", "branch")  # never valves, flanges and other symbols
+
+
+def _stretch_candidates(layout, clashes):
+    """Stretchable edges on the tree paths between clashing edges."""
     graph = layout.graph
+    found = []
+    for eid1, eid2 in clashes[:CLASHES_TRIED]:
+        e1, e2 = graph.edges[eid1], graph.edges[eid2]
+        path = _tree_path_edges(layout, e1.a, e2.a) + [eid1, eid2]
+        found.extend(eid for eid in path if graph.edges[eid].role in STRETCHABLE)
+    return list(dict.fromkeys(found))
+
+
+def _badness(layout, clashes):
+    """(number of clashes, total clearance missing) - smaller is better."""
+    graph = layout.graph
+    clear = CLEARANCE * layout.zoom
+    deficit = 0.0
+    for eid1, eid2 in clashes:
+        p1, p2 = layout.segment(graph.edges[eid1])
+        q1, q2 = layout.segment(graph.edges[eid2])
+        deficit += max(0.0, clear - _seg_dist(p1, p2, q1, q2))
+    return len(clashes), round(deficit, 6)
+
+
+def resolve_clashes(layout):
+    """Stretch pipes to remove clashes.
+
+    Each round tries lengthening every candidate and keeps the one that helps
+    most: fewer clashes, or the same number but less overlap.  It stops when
+    nothing helps, and no edge grows beyond MAX_STRETCH, so the result is
+    never worse than the start."""
     place(layout)
     clashes = find_clashes(layout)
+    current = _badness(layout, clashes)
     for _round in range(MAX_ROUNDS):
         if not clashes:
             break
-        e1, e2 = graph.edges[clashes[0][0]], graph.edges[clashes[0][1]]
-        path = _tree_path_edges(layout, e1.a, e2.a) + [e1.id, e2.id]
-        candidates = [eid for eid in dict.fromkeys(path) if graph.edges[eid].role == "pipe"]
-        if not candidates:
-            candidates = list(dict.fromkeys(path))
         best = None
-        for eid in candidates:
+        for eid in _stretch_candidates(layout, clashes):
+            factor = layout.stretch.get(eid, 1.0) * 1.35 + 0.15
+            if factor > MAX_STRETCH:
+                continue
             trial = dict(layout.stretch)
-            trial[eid] = trial.get(eid, 1.0) * 1.35 + 0.15
+            trial[eid] = factor
             saved = layout.stretch
             layout.stretch = trial
             place(layout)
-            count = len(find_clashes(layout))
+            score = _badness(layout, find_clashes(layout))
             layout.stretch = saved
-            if best is None or count < best[0]:
-                best = (count, trial)
-        layout.stretch = best[1]
+            if best is None or score < best[0]:
+                best = (score, trial)
+        if best is None or best[0] >= current:
+            break  # no stretch helps: accept the remaining clashes
+        layout.stretch, current = best[1], best[0]
         place(layout)
         clashes = find_clashes(layout)
-    return clashes
+    place(layout)
+    return find_clashes(layout)
 
 
 def _extent(layout):
@@ -329,7 +364,9 @@ def fit(layout, width, height):
 
     if not fits(K_MIN):
         w, h = _extent(layout)
-        layout.zoom *= min(width / w, height / h) * 0.95
+        # Shrink symbols, but not below ZOOM_MIN: beyond that the sheet's own
+        # fit scales the whole drawing down uniformly instead.
+        layout.zoom = max(ZOOM_MIN, layout.zoom * min(width / w, height / h) * 0.95)
     if fits(K_MAX):
         base = layout.zoom
 

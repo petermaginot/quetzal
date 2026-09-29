@@ -15,6 +15,8 @@ from pcf import pcf_geom as g
 
 MERGE_TOL = 1.0  # mm
 AXIS_TOL_DEG = 1.0
+SLOPE_TOL_DEG = 5.0  # lines this close to an axis are sloped, drawn on the axis
+SLOPE_MIN_DEG = 0.01  # below this (about 1:5700) a deviation is numerical noise, not a slope
 
 INLINE = {"FLANGE", "FLANGE-BLIND", "VALVE", "REDUCER-CONCENTRIC", "REDUCER-ECCENTRIC",
           "GASKET", "COUPLING", "UNION"}
@@ -47,6 +49,7 @@ class Edge:
     direction: tuple  # 3D unit vector a -> b
     axis: str = ""  # "X", "Y", "Z" when aligned, else "" (skewed)
     flat: tuple = None  # eccentric reducer: world direction of the flat side
+    slope: tuple = None  # sloped line drawn on its axis: its true 3D direction
 
 
 @dataclass
@@ -111,6 +114,7 @@ def build(pcf_file):
             return None
         d = g.unit(vec)
         e = Edge(len(graph.edges), na.id, nb.id, ci, role, length, d, axis_of(d))
+        _snap_slope(e)
         graph.edges.append(e)
         graph.comp_edges.setdefault(ci, []).append(e.id)
         return e
@@ -197,6 +201,24 @@ def build(pcf_file):
     return graph
 
 
+def _snap_slope(edge):
+    """Put a line within SLOPE_TOL_DEG of an axis on that axis.
+
+    A real deviation (more than SLOPE_MIN_DEG, e.g. a drain falling 1:40 or a
+    kicker rising 1:133 to meet an eccentric reducer) is kept in edge.slope so
+    it can be called out; smaller ones are numerical noise and dropped."""
+    d = edge.direction
+    i = max(range(3), key=lambda k: abs(d[k]))
+    if abs(d[i]) < math.cos(math.radians(SLOPE_TOL_DEG)):
+        return  # skewed: drawn as it is
+    axis = [0.0, 0.0, 0.0]
+    axis[i] = 1.0 if d[i] > 0 else -1.0
+    if abs(d[i]) < math.cos(math.radians(SLOPE_MIN_DEG)):
+        edge.slope = d
+    edge.length = edge.length * abs(d[i])  # along the axis
+    edge.direction, edge.axis = tuple(axis), "XYZ"[i]
+
+
 FLAT_DIRECTIONS = {"UP": (0.0, 0.0, 1.0), "DOWN": (0.0, 0.0, -1.0), "NORTH": (0.0, 1.0, 0.0),
                    "SOUTH": (0.0, -1.0, 0.0), "EAST": (1.0, 0.0, 0.0), "WEST": (-1.0, 0.0, 0.0)}
 
@@ -208,7 +230,8 @@ def _eccentric(edge, comp, n1, n2):
     raw end-to-end direction is a few degrees off the pipe axis.  Its flat
     side is the side the small end's centre is offset towards (bottoms line
     up on a flat-on-bottom reducer)."""
-    d = edge.direction
+    d = edge.slope or edge.direction
+    edge.slope = None  # the centre offset is not a slope
     i = max(range(3), key=lambda k: abs(d[k]))
     axis = [0.0, 0.0, 0.0]
     axis[i] = 1.0 if d[i] > 0 else -1.0
@@ -257,9 +280,9 @@ def _split_at_interior_nodes(graph):
                 t = g.segment_param(n.pos, a, b, MERGE_TOL)
                 if t is None or t * e.length <= MERGE_TOL or (1 - t) * e.length <= MERGE_TOL:
                     continue
-                first = g.dist(a, n.pos)
+                first = abs(g.dot(g.sub(n.pos, a), e.direction))  # along the axis
                 tail = Edge(len(graph.edges), n.id, e.b, e.comp, e.role,
-                            e.length - first, e.direction, e.axis)
+                            e.length - first, e.direction, e.axis, e.flat, e.slope)
                 e.b, e.length = n.id, first
                 graph.edges.append(tail)
                 graph.comp_edges[e.comp].append(tail.id)
@@ -304,7 +327,9 @@ def _classify_nodes(graph):
             n.weld = "SW" if "SW" in kinds else "SC" if "SC" in kinds else "BW"
         face = "FACE" in kinds
         open_end = edge_count.get(n.id, 0) == 1 and "CLOSED" not in kinds
-        n.work_point = n.centre or face or open_end or _turns(graph, n.id)
+        # Both ends of a reducer, so the pipe on each side gets its own dimension.
+        reducer = any(graph.pcf.components[c].keyword.startswith("REDUCER") for c in comps)
+        n.work_point = n.centre or face or open_end or reducer or _turns(graph, n.id)
     # A gasket's two faces are one joint: dimension to the first only.
     for e in graph.edges:
         if graph.pcf.components[e.comp].keyword == "GASKET":
@@ -325,13 +350,16 @@ def _runs(graph):
         if e.id in seen:
             continue
         chain = {e.id}
-        stack = [e.a, e.b]
+        stack = [(e.a, e), (e.b, e)]  # (node, edge we arrived by)
         while stack:
-            nid = stack.pop()
+            nid, via = stack.pop()
             for f in graph.edges_at(nid):
-                if f.id not in chain and abs(g.dot(f.direction, e.direction)) > 0.9998:
-                    chain.add(f.id)
-                    stack.append(graph.other(f, nid))
+                if f.id in chain or abs(g.dot(f.direction, e.direction)) <= 0.9998:
+                    continue
+                if via.role == "olet" and f.role == "olet" and graph.nodes[nid].centre:
+                    continue  # olets on opposite sides of a header are separate branches
+                chain.add(f.id)
+                stack.append((graph.other(f, nid), f))
         seen |= chain
         node_ids = {n for fid in chain for n in (graph.edges[fid].a, graph.edges[fid].b)}
         origin = graph.nodes[e.a].pos

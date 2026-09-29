@@ -12,7 +12,7 @@ import FreeCAD
 import pCmd
 import quetzal_units
 
-from . import pcf_map, pcf_model
+from . import pcf_fittings, pcf_map, pcf_model
 from .pcf_model import PcfComponent, PcfFile, PcfPoint
 
 translate = FreeCAD.Qt.translate
@@ -183,11 +183,27 @@ def _item_code(obj, keyword):
         value = str(getattr(obj, name, "") or "")
         if value and value != "No rating" and value not in parts:
             parts.append(value)
-    code = re.sub(r"[^A-Za-z0-9_.\-]+", "_", "-".join(parts)).upper()
     # Sizes in the description follow the user's DN/NPS preference.
     sizes = {obj.PSize, getattr(obj, "PSize2", ""), getattr(obj, "PSizeBranch", "")} - {""}
     words = [quetzal_units.format_psize(p) if p in sizes else p for p in parts[1:]]
-    description = " ".join([keyword] + words)
+    lead = [keyword]
+    # Elbows differ by angle and radius, which PRating (a schedule) does not
+    # show: a 90 LR, a 45 LR and a 6D bend must not share an item code.
+    if obj.PType in ("Elbow", "SocketEll") and hasattr(obj, "BendAngle"):
+        angle = float(getattr(obj.BendAngle, "Value", obj.BendAngle))
+        if obj.PType == "Elbow" and hasattr(obj, "BendRadius"):
+            radius = float(getattr(obj.BendRadius, "Value", obj.BendRadius))
+            dn = pcf_map.dn_number(obj.PSize) or 50
+            des = pcf_fittings.elbow_designation(angle, radius, dn)
+            parts.append(des.code)
+            lead = ["BEND" if des.is_bend else "ELBOW", "%sDEG" % des.angle_text,
+                    des.radius_class or "R%d" % round(radius)]
+        else:  # socket-weld / screwed elbow: the angle is enough
+            text = ("%.1f" % angle).rstrip("0").rstrip(".")
+            parts.append(text)
+            lead = [keyword, "%sDEG" % text]
+    code = re.sub(r"[^A-Za-z0-9_.\-]+", "_", "-".join(parts)).upper()
+    description = " ".join(lead + words)
     return code, description
 
 

@@ -3,16 +3,9 @@
 
 from math import gcd
 
-FRAC_DEN = 16  # lengths to the nearest 1/16 in
+from pcf.pcf_fittings import DN_INCH
 
-# Nominal bore in inches for each DN (ASME B36.10 / ISO 6708).  Kept here, not
-# taken from quetzal_units, so this module stays importable without FreeCAD.
-DN_INCH = {
-    6: 0.125, 8: 0.25, 10: 0.375, 15: 0.5, 20: 0.75, 25: 1, 32: 1.25, 40: 1.5,
-    50: 2, 65: 2.5, 80: 3, 90: 3.5, 100: 4, 125: 5, 150: 6, 200: 8, 250: 10,
-    300: 12, 350: 14, 400: 16, 450: 18, 500: 20, 550: 22, 600: 24, 650: 26,
-    700: 28, 750: 30, 800: 32, 850: 34, 900: 36, 1000: 40, 1050: 42, 1200: 48,
-}
+FRAC_DEN = 16  # lengths to the nearest 1/16 in
 
 
 def ftin(mm, den=FRAC_DEN):

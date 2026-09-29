@@ -1,12 +1,16 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """Isometric dimensions between work points (pure Python).
 
-Along each straight run the work points (elbow/tee/olet centres, flange and
-valve faces, open ends) are chained.  Only spans that contain pipe are
-dimensioned: fittings, flanges and valves have catalog dimensions, so a span
-made only of them needs none.  Each dimension states the true length along
-the run; its line is offset along the run's iso "across" axis, on the side
-and lane where it collides with the least.
+Along each straight run the work points (elbow/tee/olet centres, reducer
+ends, flange and valve faces, open ends) are chained.  A span is dimensioned
+when it contains pipe, or when it lies on a run that has pipe and includes a
+tee, reducer or elbow: the welder places what follows from those take-outs
+(e.g. olets measured from a flange face through a reducer), and real fittings
+vary from the catalog.  Spans made only of other fittings - valve face to
+face, or a branch stack such as olet + flange - are left to the catalog.
+Each dimension states the true length along the run; its line is offset along
+the run's iso "across" axis, on the side and lane where it collides with the
+least.
 """
 
 import math
@@ -14,7 +18,7 @@ from dataclasses import dataclass
 
 from pcf import pcf_geom as g
 
-from . import iso_format
+from . import iso_format, iso_layout
 from .iso_draw import (TEXT, W_THIN, Line, Poly, Text, add, lerp, mul, perp,
                        readable_angle, sub, text_box, unit)
 
@@ -67,17 +71,196 @@ def place_dimensions(layout, units, obstacles):
     return all_items, dims
 
 
+def slope_text(direction):
+    """'SLOPE 1:42' for a line falling 1 in 42; the angle off its axis otherwise."""
+    i = max(range(3), key=lambda k: abs(direction[k]))
+    if i == 2:
+        return "OUT OF PLUMB %.1f°" % math.degrees(math.acos(min(1.0, abs(direction[2]))))
+    fall = abs(direction[2])
+    run = math.hypot(direction[0], direction[1])
+    if fall > 1e-4:
+        return "SLOPE 1:%d" % round(run / fall)
+    return "%.1f° OFF AXIS" % math.degrees(math.acos(min(1.0, abs(direction[i]))))
+
+
+def place_slopes(layout, obstacles):
+    """A slope note with a downhill arrow beside the longest sloped pipe of each run."""
+    graph = layout.graph
+    z = layout.zoom
+    size = max(2.0, TEXT * z)
+    items = []
+    for run in graph.runs:
+        sloped = [graph.edges[i] for i in run["edges"]
+                  if graph.edges[i].slope is not None and graph.edges[i].role == "pipe"]
+        if not sloped:
+            continue
+        e = max(sloped, key=lambda f: f.length)
+        A, B = layout.pos[e.a], layout.pos[e.b]
+        u = unit(sub(B, A))
+        downhill = u if e.slope[2] < 0 else mul(u, -1.0)
+        n = layout.across(e)
+        best = None
+        for side in (1.0, -1.0):
+            # A third of the way along: the pipe's balloon points at its middle.
+            mid = add(lerp(A, B, 0.3), mul(n, side * 3.0 * z))
+            text = Text(add(mid, mul(n, side * 1.2 * z)), slope_text(e.slope), size * 0.9,
+                        readable_angle(u))
+            if side < 0:
+                text.pos = add(text.pos, mul(n, -size))  # glyphs grow away from the line
+            tail, tip = add(mid, mul(downhill, -5.0 * z)), add(mid, mul(downhill, 5.0 * z))
+            base = add(tip, mul(downhill, -ARROW_L * z))
+            w = mul(perp(downhill), ARROW_W * z)
+            group = [text, Line(tail, tip, W_THIN), Poly([tip, add(base, w), sub(base, w)], W_THIN, fill=True)]
+            hits = obstacles.hits_box(text_box(text)) + obstacles.hits_segment(tail, tip)
+            if best is None or hits < best[0]:
+                best = (hits, group)
+        obstacles.add_drawing(best[1])
+        items.extend(best[1])
+    return items
+
+
+ROLL_MIN_DEG = 0.33  # rolls smaller than this are within what a fitter can set
+ROLL_R = 3.5  # radius of the roll symbol, mm
+ROLL_GAP_DEG = 60.0  # open part of the roll symbol, centred on the rolled leg
+
+
+def _true_dir(edge, start):
+    """True (unsnapped) unit direction of edge, pointing away from node start."""
+    d = edge.slope or edge.direction
+    return d if edge.a == start else g.scale(d, -1.0)
+
+
+def _off_axis(d):
+    return math.degrees(math.acos(min(1.0, max(abs(c) for c in d))))
+
+
+def _cross(a, b):
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def roll_info(graph, comp_index):
+    """How an elbow or tee is rolled, or None if it is not.
+
+    The fitting's plane holds its two directions (elbow legs; tee run and
+    branch).  Its tilt from the nearest principal plane is the roll.  The roll
+    is set by turning the fitting about its squarest direction (the
+    reference) at that direction's weld; the other direction then moves from
+    square to its true position.  Returns a dict: angle (deg), centre and weld
+    node ids, axis (weld -> centre, true), rolled (true direction of the other
+    leg from the centre)."""
+    comp = graph.pcf.components[comp_index]
+    edges = [graph.edges[i] for i in graph.comp_edges.get(comp_index, [])]
+    legs = [e for e in edges if e.role == "leg"]
+    branch = [e for e in edges if e.role == "branch"]
+    if comp.keyword in ("ELBOW", "BEND") and len(legs) == 2:
+        options = legs
+    elif comp.keyword == "TEE" and len(legs) == 2 and branch:
+        options = [legs[0], branch[0]]  # the run (either half) and the branch
+    else:
+        return None
+    centre = next((n for e in options for n in (e.a, e.b) if graph.nodes[n].centre), None)
+    if centre is None:
+        return None
+    outward = [_true_dir(e, centre) for e in options]
+    normal = _cross(outward[0], outward[1])
+    size = g.length(normal)
+    if size < 1e-9:
+        return None
+    angle = math.degrees(math.acos(min(1.0, max(abs(c) for c in normal) / size)))
+    ref = min(range(2), key=lambda i: _off_axis(outward[i]))
+    weld = graph.other(options[ref], centre)
+    return {"angle": angle, "centre": centre, "weld": weld,
+            "axis": g.scale(outward[ref], -1.0), "rolled": outward[1 - ref]}
+
+
+def roll_angle(graph, comp_index):
+    info = roll_info(graph, comp_index)
+    return info["angle"] if info else 0.0
+
+
+def roll_symbol(layout, info, z):
+    """Open circular arrow around the reference pipe at its weld, in the plane
+    square to that pipe, turning the way that takes the rolled leg from square
+    to its true position.  The opening faces the rolled leg."""
+    a = info["axis"]
+    to = g.unit(g.sub(info["rolled"], g.scale(a, g.dot(info["rolled"], a))))
+    k = max(range(3), key=lambda i: abs(to[i]))
+    square = [0.0, 0.0, 0.0]
+    square[k] = 1.0 if to[k] > 0 else -1.0
+    u = g.unit(g.sub(tuple(square), g.scale(a, g.dot(tuple(square), a))))
+    w = _cross(a, u)  # u -> w turns positively about a
+    sense = 1.0 if g.dot(a, _cross(tuple(square), to)) >= 0 else -1.0
+    W = layout.pos[info["weld"]]
+    r = ROLL_R * z
+
+    def at(t):
+        v = g.add(g.scale(u, math.cos(t)), g.scale(w, math.sin(t)))
+        p = iso_layout.project(v, layout.rotation)
+        return (W[0] + r * p[0], W[1] + r * p[1])
+
+    half_gap = math.radians(ROLL_GAP_DEG / 2.0)
+    steps = 28
+    ts = [half_gap + (2 * math.pi - 2 * half_gap) * i / steps for i in range(steps + 1)]
+    if sense < 0:
+        ts.reverse()
+    pts = [at(t) for t in ts]
+    tip, before = pts[-1], pts[-2]
+    d = unit(sub(tip, before))
+    base = add(tip, mul(d, -ARROW_L * 1.2 * z))
+    wv = mul(perp(d), ARROW_W * 1.6 * z)
+    return [Poly(pts, W_THIN * 1.6, closed=False), Poly([tip, add(base, wv), sub(base, wv)], W_THIN, fill=True)]
+
+
+def place_rolls(layout, obstacles):
+    """A roll symbol at the weld where each rolled elbow or tee is turned,
+    with 'ROLL x.xx°' beside it."""
+    graph = layout.graph
+    z = layout.zoom
+    size = max(2.0, TEXT * z) * 0.9
+    items = []
+    for ci, comp in enumerate(graph.pcf.components):
+        if comp.keyword not in ("ELBOW", "BEND", "TEE"):
+            continue
+        info = roll_info(graph, ci)
+        if info is None or info["angle"] < ROLL_MIN_DEG:
+            continue
+        symbol = roll_symbol(layout, info, z)
+        obstacles.add_drawing(symbol)
+        items.extend(symbol)
+        W, C = layout.pos[info["weld"]], layout.pos[info["centre"]]
+        away = unit(sub(W, C)) if sub(W, C) != (0.0, 0.0) else (1.0, 0.0)
+        best = None
+        for dist in (ROLL_R + 5.0, ROLL_R + 9.0, ROLL_R + 14.0):
+            for d in (perp(away), mul(perp(away), -1.0), away):
+                text = Text(add(W, mul(d, dist * z)), "ROLL %.2f\u00b0" % info["angle"], size)
+                hits = obstacles.hits_box(text_box(text))
+                if best is None or hits < best[0]:
+                    best = (hits, text)
+            if best[0] == 0:
+                break
+        obstacles.add_drawing([best[1]])
+        items.append(best[1])
+    return items
+
+
+TAKE_OUT_FITTINGS = {"TEE", "REDUCER-CONCENTRIC", "REDUCER-ECCENTRIC", "ELBOW", "BEND"}
+
+
 def _spans(graph, layout, run):
-    """(a, b, length) for consecutive work points on run with pipe between them."""
+    """(a, b, length) for the consecutive work points on run worth dimensioning."""
     order = {nid: i for i, nid in enumerate(run["nodes"])}
-    pipes = [sorted((order[e.a], order[e.b])) for e in (graph.edges[i] for i in run["edges"])
-             if e.role == "pipe"]
+    edges = [(sorted((order[e.a], order[e.b])), e) for e in (graph.edges[i] for i in run["edges"])]
+    run_has_pipe = any(e.role == "pipe" for _span, e in edges)
     wps = [nid for nid in run["nodes"] if graph.nodes[nid].work_point and nid in layout.pos]
     spans = []
     for a, b in zip(wps, wps[1:]):
         lo, hi = order[a], order[b]
-        if not any(lo <= p0 and p1 <= hi for p0, p1 in pipes):
-            continue  # fittings only: their own dimensions fix this span
+        inside = [e for (p0, p1), e in edges if lo <= p0 and p1 <= hi]
+        has_pipe = any(e.role == "pipe" for e in inside)
+        take_out = run_has_pipe and any(
+            graph.pcf.components[e.comp].keyword in TAKE_OUT_FITTINGS for e in inside)
+        if not (has_pipe or take_out):
+            continue  # valves or a branch stack: their catalog dimensions fix this span
         # Measured along the run, so an eccentric reducer's offset does not count.
         value = abs(g.dot(g.sub(graph.nodes[b].pos, graph.nodes[a].pos), run["direction"]))
         if value >= MIN_VALUE:

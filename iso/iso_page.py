@@ -3,7 +3,8 @@
 
 Each page holds one DrawViewSymbol the size of the sheet, placed at the page
 centre, so SVG coordinates are page millimetres.  The inputs needed to
-regenerate it are stored as properties on that view.
+regenerate it are stored as properties on that view.  The BOM and notes are
+separate, editable objects (see iso_tables).
 """
 
 import os
@@ -14,7 +15,7 @@ import FreeCAD
 import quetzal_units
 from pcf import pcf_export, pcf_model
 
-from . import iso_build, iso_sheet
+from . import iso_build, iso_sheet, iso_tables
 
 translate = FreeCAD.Qt.translate
 GROUP = "Isometric"
@@ -91,12 +92,14 @@ def _set_title(template, fields):
 
 
 def _render(view, pcf_file):
+    """Redraw the iso, and create or refresh its editable BOM and notes."""
     page = view.findParentPage()
-    sheet = iso_build.build_sheet(pcf_file, _options_for(view))
+    sheet = iso_build.build_sheet(pcf_file, _options_for(view), tables=False)
     view.Symbol = sheet.svg
     fmt = iso_sheet.FORMATS[view.IsoSheetFormat]
     view.X, view.Y = fmt.width / 2.0, fmt.height / 2.0
     _set_title(page.Template, sheet.title)
+    iso_tables.update_tables(view, sheet, fmt)
     for w in sheet.warnings:
         _warn("%s: %s" % (pcf_file.pipeline_reference, w))
     return sheet
@@ -106,12 +109,12 @@ def create_page(doc, pcf_file, options, source=None, pcf_path=""):
     """New TechDraw page with the isometric of one pipeline."""
     fmt = options.sheet
     page = doc.addObject("TechDraw::DrawPage", "IsoPage")
-    page.Label = "ISO " + pcf_file.pipeline_reference
+    page.Label = iso_tables.safe_label("ISO " + pcf_file.pipeline_reference)
     template = doc.addObject("TechDraw::DrawSVGTemplate", "IsoTemplate")
     template.Template = template_path(fmt)
     page.Template = template
     view = doc.addObject("TechDraw::DrawViewSymbol", "Isometric")
-    view.Label = "Isometric " + pcf_file.pipeline_reference
+    view.Label = iso_tables.safe_label("Isometric " + pcf_file.pipeline_reference)
     _add_iso_properties(view)
     view.IsoSource = list(source or [])
     view.IsoPcfPath = pcf_path

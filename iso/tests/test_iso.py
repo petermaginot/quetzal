@@ -119,9 +119,158 @@ class EccentricTests(unittest.TestCase):
             self.assertAlmostEqual(got, want)
         self.assertEqual(len(self.g.runs), 1)  # one straight run through the reducer
 
-    def test_dimension_along_the_run(self):
+    def test_dimensions_to_both_reducer_ends(self):
         sheet = iso_build.build_sheet(self.pf)
-        self.assertEqual([round(d.value, 1) for d in sheet.dimensions], [2000.0])
+        # Pipe to the large end, the reducer itself (a take-out the welder
+        # checks against the real fitting) and pipe from the small end, all
+        # along the run: the reducer's 25.4 mm centre offset does not count.
+        self.assertEqual(sorted(round(d.value, 1) for d in sheet.dimensions), [152.0, 848.0, 1000.0])
+
+
+VENT_AND_DRAIN = """UNITS-BORE MM
+UNITS-CO-ORDS MM
+PIPELINE-REFERENCE HEADER
+PIPE
+    END-POINT 0 0 0 200
+    END-POINT 2000 0 0 200
+OLET
+    CENTRE-POINT 1000 0 0
+    BRANCH1-POINT 1000 0 130 25
+    SKEY WTBW
+PIPE
+    END-POINT 1000 0 130 25
+    END-POINT 1000 0 280 25
+OLET
+    CENTRE-POINT 1000 0 0
+    BRANCH1-POINT 1000 0 -150 50
+    SKEY WTBW
+ELBOW
+    END-POINT 1000 0 -150 50
+    END-POINT 1076 0 -226 50
+    CENTRE-POINT 1000 0 -226
+    SKEY ELBW
+"""
+
+
+class BranchStackTests(unittest.TestCase):
+    def test_opposite_olets_are_separate_runs(self):
+        pf = pcf_model.parse(VENT_AND_DRAIN)[0]
+        sheet = iso_build.build_sheet(pf)
+        values = sorted(round(d.value, 1) for d in sheet.dimensions)
+        # Header 1000 + 1000 and the vent nipple (olet centre to its end, 280);
+        # not the drain's olet + elbow (226), although the vent pipe is on the
+        # same vertical line through the header.
+        self.assertEqual(values, [280.0, 1000.0, 1000.0])
+
+
+class KickerTests(unittest.TestCase):
+    """A kicker rising 0.42 deg (1:134) to meet an eccentric reducer's offset:
+    below the 1 deg drawing tolerance, so it is drawn level, but the slope and
+    the elbow's roll must still be called out."""
+
+    def setUp(self):
+        path = os.path.join(os.path.dirname(__file__), "data", "kicker.pcf")
+        with open(path, encoding="utf-8") as f:
+            self.pf = pcf_model.parse(f.read())[0]
+
+    def test_slope_and_roll_called_out(self):
+        from iso import iso_dims
+        g = iso_graph.build(self.pf)
+        slopes = [iso_dims.slope_text(e.slope) for e in g.edges if e.slope and e.role == "pipe"]
+        self.assertEqual(slopes, ["SLOPE 1:134"])
+        elbow = [i for i, c in enumerate(self.pf.components) if c.keyword == "ELBOW"][0]
+        self.assertAlmostEqual(iso_dims.roll_angle(g, elbow), 0.42, places=2)
+        sheet = iso_build.build_sheet(self.pf)
+        self.assertIn("SLOPE 1:134", sheet.svg)
+        self.assertIn("ROLL 0.42", sheet.svg)
+
+    def test_no_false_callouts_on_square_lines(self):
+        for name in ("foreign.pcf", "sample.pcf"):
+            sheet = iso_build.build_sheet(load(name))
+            self.assertNotIn("ROLL", sheet.svg, name)
+            self.assertNotIn("SLOPE", sheet.svg, name)
+
+
+def rolled_tee_pcf(roll_deg):
+    """Header along X with a tee whose branch is rolled roll_deg from vertical."""
+    r = math.radians(roll_deg)
+    by, bz = 150.0 * math.sin(r), 150.0 * math.cos(r)
+    return pcf_model.parse("""UNITS-BORE MM
+UNITS-CO-ORDS MM
+PIPELINE-REFERENCE TEE
+PIPE
+    END-POINT 0 0 0 150
+    END-POINT 1000 0 0 150
+TEE
+    END-POINT 1000 0 0 150
+    END-POINT 1300 0 0 150
+    CENTRE-POINT 1150 0 0
+    BRANCH1-POINT 1150 %.4f %.4f 100
+    SKEY TEBW
+PIPE
+    END-POINT 1150 %.4f %.4f 100
+    END-POINT 1150 %.4f %.4f 100
+""" % (by, bz, by, bz, by * 5, bz * 5))[0]
+
+
+class RollTests(unittest.TestCase):
+    def test_rolled_tee_called_out_at_a_run_weld(self):
+        from iso import iso_dims
+        pf = rolled_tee_pcf(1.0)
+        g = iso_graph.build(pf)
+        tee = [i for i, c in enumerate(pf.components) if c.keyword == "TEE"][0]
+        info = iso_dims.roll_info(g, tee)
+        self.assertAlmostEqual(info["angle"], 1.0, places=3)
+        weld = g.nodes[info["weld"]].pos
+        self.assertAlmostEqual(weld[1], 0.0)  # the (square) run, not the branch
+        self.assertAlmostEqual(weld[2], 0.0)
+        self.assertIn("ROLL 1.00", iso_build.build_sheet(pf).svg)
+
+    def test_small_roll_ignored(self):
+        self.assertNotIn("ROLL", iso_build.build_sheet(rolled_tee_pcf(0.2)).svg)
+
+    def test_roll_direction_follows_the_rolled_leg(self):
+        from iso import iso_dims
+        g_pos, g_neg = iso_graph.build(rolled_tee_pcf(1.0)), iso_graph.build(rolled_tee_pcf(-1.0))
+        lay_p = iso_layout.place(iso_layout.Layout(g_pos))
+        lay_n = iso_layout.place(iso_layout.Layout(g_neg))
+        tee = 1
+        arc_p = iso_dims.roll_symbol(lay_p, iso_dims.roll_info(g_pos, tee), 1.0)[0].points
+        arc_n = iso_dims.roll_symbol(lay_n, iso_dims.roll_info(g_neg, tee), 1.0)[0].points
+        # Opposite rolls draw the same arc in opposite directions.
+        self.assertAlmostEqual(arc_p[0][0], arc_n[-1][0], places=6)
+        self.assertAlmostEqual(arc_p[-1][0], arc_n[0][0], places=6)
+
+
+def elbows_pcf():
+    """A DN50 90 LR and 45 LR sharing one item code (as a schedule-only
+    PRating makes them), and a DN100 45 degree 6D bend."""
+    def elbow(cx, angle, radius, bore):
+        # First leg along +X into the centre, second leg turned by angle.
+        t = radius * math.tan(math.radians(angle) / 2)
+        a = math.radians(angle)
+        return [
+            "ELBOW",
+            "    END-POINT %.3f 0 0 %d" % (cx - t, bore),
+            "    END-POINT %.3f %.3f 0 %d" % (cx + t * math.cos(a), t * math.sin(a), bore),
+            "    CENTRE-POINT %.3f 0 0" % cx,
+            "    SKEY ELBW",
+            "    ITEM-CODE ELBOW-DN%d-SCH-XS" % bore,
+        ]
+
+    lines = ["UNITS-BORE MM", "UNITS-CO-ORDS MM", "PIPELINE-REFERENCE ELBOWS",
+             "MATERIALS", "ITEM-CODE ELBOW-DN50-SCH-XS", "    DESCRIPTION ELBOW NPS 2 SCH-XS"]
+    lines += elbow(0, 90, 76.2, 50) + elbow(1000, 45, 76.2, 50) + elbow(3000, 45, 685.8, 100)
+    return pcf_model.parse("\n".join(lines) + "\n")[0]
+
+
+class ElbowBomTests(unittest.TestCase):
+    def test_elbows_split_by_angle_and_radius(self):
+        rows = iso_build.build_sheet(elbows_pcf(), iso_build.Options(units="ftin")).bom
+        descs = sorted(r.description for r in rows)
+        self.assertEqual(descs, ["BEND 45° 6D, R 2'-3\"", "ELBOW 45° LR, NPS 2 SCH-XS",
+                                 "ELBOW 90° LR, NPS 2 SCH-XS"])
+        self.assertEqual(len({r.number for r in rows}), 3)
 
 
 class CameraTests(unittest.TestCase):
@@ -142,6 +291,40 @@ class CameraTests(unittest.TestCase):
     def test_from_below_uses_the_same_heading(self):
         # Looking up from below, heading like rotation 3 from above.
         self.assertEqual(iso_layout.rotation_for_camera((-0.577, -0.577, 0.577), (0.408, 0.408, 0.816)), 3)
+
+
+class LauncherTests(unittest.TestCase):
+    """A pig launcher with a sloped kicker (1:42) and three drains/vents.
+
+    It once sent the clash pass into runaway stretching (factors ~1e21) that
+    collapsed the whole drawing."""
+
+    def setUp(self):
+        path = os.path.join(os.path.dirname(__file__), "data", "launcher.pcf")
+        with open(path, encoding="utf-8") as f:
+            self.pf = pcf_model.parse(f.read())[0]
+
+    def test_sloped_kicker_is_drawn_on_its_axis(self):
+        g = iso_graph.build(self.pf)
+        self.assertEqual([e.id for e in g.edges if not e.axis], [])
+        sloped = [e for e in g.edges if e.slope]
+        self.assertTrue(sloped)
+        from iso import iso_dims
+        self.assertEqual(iso_dims.slope_text(sloped[0].slope), "SLOPE 1:42")
+
+    def test_layout_stays_sane_in_every_rotation(self):
+        for rot in range(4):
+            sheet = iso_build.build_sheet(self.pf, iso_build.Options(rotation=rot))
+            lay = sheet.layout
+            self.assertGreaterEqual(lay.zoom, iso_layout.ZOOM_MIN)
+            self.assertTrue(all(v <= iso_layout.MAX_STRETCH for v in lay.stretch.values()))
+            self.assertGreater(sheet.scale, 0.5)
+            self.assertLessEqual(len(lay.clashes), 3)
+
+    def test_best_rotation_is_clean(self):
+        sheet = iso_build.build_sheet(self.pf)
+        self.assertEqual(sheet.layout.clashes, [])
+        self.assertIn("SLOPE 1:42", sheet.svg)
 
 
 class LayoutTests(unittest.TestCase):
@@ -185,9 +368,11 @@ class SheetTests(unittest.TestCase):
             self.assertAlmostEqual(d.value, true, places=6)
             self.assertEqual(d.text, "%d" % round(true))
         values = sorted(round(d.value, 1) for d in self.sheet.dimensions)
-        # Only spans with pipe: not the valve (219), the olet + elbow (120, 25)
-        # or the stand-alone instrument (200).
-        self.assertEqual(values, [447.6, 500.0, 563.3, 652.4, 1104.8])
+        # Spans with pipe, plus tee/reducer take-outs on runs with pipe
+        # (tee centre to reducer 104.8, the reducer 101.6).  Not the valve
+        # face to face (219), the olet + elbow branch stack (120, 25) or the
+        # stand-alone instrument (200).
+        self.assertEqual(values, [101.6, 104.8, 356.9, 447.6, 500.0, 652.4, 1104.8])
 
     def test_bom(self):
         rows = {r.description: r for r in self.sheet.bom}

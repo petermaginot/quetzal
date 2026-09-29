@@ -39,9 +39,12 @@ class IsoSheet:
     title: dict
     scale: float  # uniform shrink applied to fit the iso area (1 = none)
     warnings: list = field(default_factory=list)
+    notes: list = field(default_factory=list)  # note texts, unnumbered
 
 
-def build_sheet(pcf_file, options=None, sheet_label="1 OF 1"):
+def build_sheet(pcf_file, options=None, sheet_label="1 OF 1", tables=True):
+    """tables=False leaves the BOM table and the notes out of the SVG, for a
+    TechDraw page that shows them as an editable spreadsheet and annotation."""
     opt = options or Options()
     fmt = opt.sheet
     x0, y0, x1, y1 = fmt.iso_area
@@ -64,6 +67,8 @@ def build_sheet(pcf_file, options=None, sheet_label="1 OF 1"):
     obstacles = Obstacles()
     obstacles.add_drawing(paper)
     dim_items, dimensions = iso_dims.place_dimensions(layout, opt.units, obstacles)
+    dim_items += iso_dims.place_slopes(layout, obstacles)
+    dim_items += iso_dims.place_rolls(layout, obstacles)
     bom = iso_bom.bom_items(pcf_file, opt.units, opt.size_system)
     balloon_items, balloons = iso_bom.place_balloons(bom, anchors, layout, obstacles)
     paper = paper + dim_items + balloon_items
@@ -80,12 +85,14 @@ def build_sheet(pcf_file, options=None, sheet_label="1 OF 1"):
         "date": datetime.date.today().isoformat(),
     })
     items += _north_arrow(layout, fmt)
-    bom_bottom, table = _bom_table(bom, fmt)
-    items += table
+    items.append(bom_heading(fmt))
     notes = _notes(pcf_file, opt, spec)
-    items += _notes_block(notes, fmt, bom_bottom, warnings)
+    if tables:
+        bom_bottom, table = _bom_table(bom, fmt)
+        items += table
+        items += _notes_block(notes, fmt, bom_bottom, warnings)
     svg = render(items, fmt.width, fmt.height)
-    return IsoSheet(svg, items, layout, dimensions, bom, balloons, title, scale, warnings)
+    return IsoSheet(svg, items, layout, dimensions, bom, balloons, title, scale, warnings, notes)
 
 
 # --------------------------------------------------------------------------
@@ -137,13 +144,21 @@ def _wrap(text, width_mm, size):
     return textwrap.wrap(text, chars) or [""]
 
 
+TABLE_TOP = 6.0  # the table starts this far below the top of the BOM area
+
+
+def bom_heading(fmt):
+    x0, y0, x1, _y1 = fmt.bom_area
+    return Text(((x0 + x1) / 2, y0 + 4.0), "BILL OF MATERIAL", 3.5, bold=True)
+
+
 def _bom_table(bom, fmt):
     """Table rows from the top of the BOM area; returns (bottom y, items)."""
     x0, y0, x1, y1 = fmt.bom_area
     cols = [x0, x0 + COLS[0], x0 + COLS[0] + COLS[1], x0 + sum(COLS), x1]
     size = TEXT
-    items = [Text(((x0 + x1) / 2, y0 + 4.0), "BILL OF MATERIAL", 3.5, bold=True)]
-    y = y0 + 6.0
+    items = []
+    y = y0 + TABLE_TOP
     top = y
     heads = ("PT", "QTY", "SIZE", "DESCRIPTION")
     for i, h in enumerate(heads):
@@ -174,7 +189,7 @@ def _bom_table(bom, fmt):
 def _notes(pcf_file, opt, spec):
     notes = ["NOT TO SCALE.",
              "DIMENSIONS IN %s." % ("FEET AND INCHES" if opt.units == "ftin" else "MILLIMETRES"),
-             "DIMENSIONS ARE TO FITTING CENTRELINES, FLANGE FACES AND OPEN ENDS.",
+             "DIMENSIONS ARE TO FITTING CENTRELINES, REDUCER ENDS, FLANGE FACES AND OPEN ENDS.",
              "PIPELINE: %s" % pcf_file.pipeline_reference]
     if spec:
         notes.append("PIPING SPEC: %s" % spec)
