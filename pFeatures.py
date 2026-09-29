@@ -1747,18 +1747,19 @@ class PypeLine2(pypeType):
         # define specific properties
         if not BR:
             BR = 0.75 * OD
-        obj.addProperty(
-            "App::PropertyLength",
-            "BendRadius",
-            "PypeLine2",
-            QT_TRANSLATE_NOOP("App::Property", "the radius of bending"),
-        ).BendRadius = BR
+        # OD first: onChanged("OD") resets BendRadius to 0.75 * OD.
         obj.addProperty(
             "App::PropertyLength",
             "OD",
             "PypeLine2",
             QT_TRANSLATE_NOOP("App::Property", "Outside diameter"),
         ).OD = OD
+        obj.addProperty(
+            "App::PropertyLength",
+            "BendRadius",
+            "PypeLine2",
+            QT_TRANSLATE_NOOP("App::Property", "the radius of bending"),
+        ).BendRadius = BR
         obj.addProperty(
             "App::PropertyLength",
             "thk",
@@ -1816,6 +1817,7 @@ class PypeLine2(pypeType):
                 propList = [fp.PSize, fp.OD, fp.thk, 90, fp.BendRadius]
                 c = pCmd.makeElbowBetweenThings(edges[n], edges[n - 1], propList)
                 if c:
+                    c.PRating = fp.PRating
                     portA, portB = [c.Placement.multVec(port) for port in c.Ports]
                     # ---Trim the tube---
                     p1, p2 = pipes[-2:]

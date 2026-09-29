@@ -9,9 +9,9 @@ import math
 
 from pcf import pcf_geom as g
 
-from . import iso_layout
-from .iso_draw import (W_PIPE, W_SYMBOL, W_THIN, Circle, Line, Poly, Text, add, lerp,
-                       mul, sub, unit)
+from . import iso_format, iso_layout
+from .iso_draw import (CHAR_W, TEXT, W_PIPE, W_SYMBOL, W_THIN, Circle, Line, Poly, Text, add,
+                       lerp, mul, sub, unit)
 
 H = 3.0  # half-height of flanges, valves and reducers
 WELD_R = 0.8
@@ -20,7 +20,8 @@ VALVE_MARKS = {"VB": "ball", "VG": "globe", "VC": "check", "VP": "plug", "VY": "
                "VT": "gate"}
 
 
-def draw(layout):
+def draw(layout, units="mm"):
+    """units sizes the skew triangles to their offset labels (mm or ftin)."""
     graph = layout.graph
     comps = graph.pcf.components
     z = layout.zoom
@@ -43,14 +44,21 @@ def draw(layout):
             else:
                 anchors.setdefault(e.comp, P if e.role == "branch" else _centre(graph, layout, e))
         elif e.role == "olet":
-            items.append(Poly([add(P, mul(n, 2.2 * z)), add(Q, mul(n, 1.4 * z)),
-                               add(Q, mul(n, -1.4 * z)), add(P, mul(n, -2.2 * z))], W_SYMBOL))
-            anchors[e.comp] = mid
+            # The olet keeps its size when its edge is stretched to clear a
+            # clash; the rest is drawn as line.
+            full = math.hypot(Q[0] - P[0], Q[1] - P[1])
+            R = Q
+            if full > iso_layout.OLET_LEN * z * 1.05:
+                R = add(P, mul(unit(sub(Q, P)), iso_layout.OLET_LEN * z))
+                items.append(Line(R, Q, W_PIPE))
+            items.append(Poly([add(P, mul(n, 2.2 * z)), add(R, mul(n, 1.4 * z)),
+                               add(R, mul(n, -1.4 * z)), add(P, mul(n, -2.2 * z))], W_SYMBOL))
+            anchors[e.comp] = lerp(P, R, 0.5)
         else:
             items.extend(_inline(layout, e, comp, P, Q, n, z))
             anchors[e.comp] = mid
-        if not e.axis:
-            items.extend(_skew_triangle(layout, e, P, Q, z))
+    for mark in skew_marks(layout, units):
+        items.extend(mark["items"])
 
     for m in graph.markers:
         comp = comps[m.comp]
@@ -63,6 +71,9 @@ def draw(layout):
             if m.kind == "support":
                 items.extend(_support(layout, e, at, comp, z))
             anchors[m.comp] = at
+        elif m.kind == "point" and m.node in layout.pos:
+            items.extend(_point_item(layout, m.node, comp, z))
+            anchors[m.comp] = pos(m.node)
 
     for node in graph.nodes:
         if node.id not in layout.pos:
@@ -182,8 +193,25 @@ def _bore_at(comp, point):
 def _stem_dir(layout, e):
     """Valve stem: up for horizontal lines, north for vertical ones."""
     if abs(e.direction[2]) > 0.99:
-        return unit(iso_layout.project((0.0, 1.0, 0.0), layout.rotation))
-    return unit(iso_layout.project((0.0, 0.0, 1.0), layout.rotation))
+        return layout.perpendicular(e, (0.0, 1.0, 0.0))
+    return layout.perpendicular(e, (0.0, 0.0, 1.0))
+
+
+def _point_item(layout, node_id, comp, z):
+    """An inline item of zero length (e.g. a lap-joint flange without its stub
+    end): drawn across the line at its node."""
+    edges = layout.graph.edges_at(node_id)
+    if not edges:
+        return []
+    e = edges[0]
+    C = layout.pos[node_id]
+    n = layout.across(e)
+    d = layout.screen_dir(e)
+    h = H * z
+    if comp.keyword in ("FLANGE", "FLANGE-BLIND"):
+        return [_across_line(add(C, mul(d, -0.5 * z)), n, h, W_PIPE),
+                _across_line(add(C, mul(d, 0.5 * z)), n, h, W_PIPE)]
+    return [_across_line(C, n, 0.8 * h, W_SYMBOL)]
 
 
 def _cap(layout, node_id, z):
@@ -203,9 +231,9 @@ def _cap(layout, node_id, z):
 
 
 def _support(layout, e, at, comp, z):
-    down = unit(iso_layout.project((0.0, 0.0, -1.0), layout.rotation))
+    down = layout.perpendicular(e, (0.0, 0.0, -1.0))
     if abs(e.direction[2]) > 0.99:
-        down = unit(iso_layout.project((-1.0, 0.0, 0.0), layout.rotation))
+        down = layout.perpendicular(e, (-1.0, 0.0, 0.0))
     d = layout.screen_dir(e)
     base = add(at, mul(down, 3.0 * z))
     out = [Poly([at, add(base, mul(d, 1.8 * z)), add(base, mul(d, -1.8 * z))], W_SYMBOL, fill=True)]
@@ -215,22 +243,81 @@ def _support(layout, e, at, comp, z):
     return out
 
 
-def _skew_triangle(layout, e, P, Q, z):
-    """Hatched triangle whose legs follow the two main iso axes of a skewed line."""
-    comps = sorted(range(3), key=lambda i: -abs(e.direction[i]))[:2]
-    axes = []
-    for i in comps:
-        v = [0.0, 0.0, 0.0]
-        v[i] = 1.0 if e.direction[i] > 0 else -1.0
-        axes.append(iso_layout.project(tuple(v), layout.rotation))
-    s = sub(Q, P)
-    (a1, b1), (a2, b2) = axes
-    det = a1 * b2 - a2 * b1
-    if abs(det) < 1e-9:
-        return []
-    k1 = (s[0] * b2 - s[1] * a2) / det
-    corner = add(P, mul(axes[0], k1))
-    out = [Line(P, corner, W_THIN), Line(corner, Q, W_THIN)]
-    for t in (0.25, 0.5, 0.75):
-        out.append(Line(lerp(P, corner, t), lerp(P, Q, t), W_THIN))
+SKEW_TRI_LEN = 14.0  # paper mm along the pipe covered by a skew triangle
+SKEW_LEG_MIN = 6.0  # paper mm: the triangle grows (up to 80% of its pipe) to give short legs room
+SKEW_MIN_OFFSET = 1.0  # mm; a smaller offset along an axis is not a skew in that axis
+
+
+def skew_text_size(layout):
+    return max(1.8, TEXT * layout.zoom * 0.8)
+
+
+def skew_marks(layout, units="mm"):
+    """One hatched skew triangle per skewed run, on its longest pipe.
+
+    Its legs follow the world axes the run is offset along, and each carries
+    the run's true offset between its end work points (labelled by
+    iso_dims.place_skew_offsets).  A run offset in all three axes gets a plan
+    triangle and a rise triangle standing on its diagonal.  Returns
+    [{"items": [...], "legs": [(p, q, offset mm, triangle centroid)]}]."""
+    graph = layout.graph
+    z = layout.zoom
+    out = []
+    for run in graph.runs:
+        if run["axis"]:
+            continue
+        edges = [graph.edges[i] for i in run["edges"] if graph.edges[i].a in layout.pos]
+        if not edges:
+            continue
+        pipes = [e for e in edges if e.role == "pipe"] or edges
+        e = max(pipes, key=lambda f: g.dist(*[(p[0], p[1], 0.0) for p in layout.segment(f)]))
+        P, Q = layout.segment(e)
+        length = math.hypot(Q[0] - P[0], Q[1] - P[1])
+        if length < 1e-6:
+            continue
+        nodes = run["nodes"]
+        V = g.sub(graph.nodes[nodes[-1]].pos, graph.nodes[nodes[0]].pos)
+        if g.dot(V, e.direction) < 0:
+            V = g.scale(V, -1.0)
+        parts = []
+        for i in range(3):
+            if abs(V[i]) >= SKEW_MIN_OFFSET:
+                v = [0.0, 0.0, 0.0]
+                v[i] = V[i]
+                parts.append(tuple(v))
+        if len(parts) < 2:
+            continue
+        full = iso_layout.project(V, layout.rotation)
+        size = math.hypot(full[0], full[1])
+        if size < 1e-9:
+            continue
+        steps = [iso_layout.project(part, layout.rotation) for part in parts]
+        # Each leg at least as long as its label (ft-in offsets run to 11 characters).
+        text = skew_text_size(layout)
+        tri = SKEW_TRI_LEN * z
+        for part, st in zip(parts, steps):
+            share = math.hypot(*st) / size  # leg length per paper mm of triangle
+            label = CHAR_W * text * len(iso_format.length_text(max(abs(c) for c in part), units))
+            tri = max(tri, max(SKEW_LEG_MIN * z, label + 1.5 * z) / max(share, 1e-6))
+        tri = min(tri, (0.6 if tri <= SKEW_TRI_LEN * z else 0.8) * length)
+        k = tri / size
+        start = lerp(P, Q, 0.2 if length > 2 * tri else 0.5 * (1 - tri / length))
+        pts = [start]
+        for step in steps:
+            pts.append(add(pts[-1], mul(step, k)))
+        items, legs = [], []
+        for a, b, part in zip(pts, pts[1:], parts):
+            items.append(Line(a, b, W_THIN))
+        if len(parts) == 2:
+            tris = [(pts[0], pts[1], pts[2])]
+        else:  # plan triangle, then the rise standing on its diagonal (not hatched)
+            items.append(Line(pts[0], pts[2], W_THIN))
+            tris = [(pts[0], pts[1], pts[2]), (pts[0], pts[2], pts[3])]
+        A, B, C = tris[0]  # hatch parallel to the first leg
+        for t in (0.3, 0.55, 0.8):
+            items.append(Line(lerp(A, C, t), lerp(B, C, t), W_THIN))
+        for (a, b), part, tri_pts in zip(zip(pts, pts[1:]), parts, (tris[0], tris[0], tris[-1])):
+            centroid = mul(add(add(tri_pts[0], tri_pts[1]), tri_pts[2]), 1.0 / 3.0)
+            legs.append((a, b, max(abs(c) for c in part), centroid))
+        out.append({"items": items, "legs": legs, "run": run})
     return out

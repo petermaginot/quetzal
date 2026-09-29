@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pcf import pcf_geom as g
 
 from . import iso_format, iso_layout
-from .iso_draw import (TEXT, W_THIN, Line, Poly, Text, add, lerp, mul, perp,
+from .iso_draw import (TEXT, W_THIN, Line, Obstacles, Poly, Text, add, lerp, mul, perp,
                        readable_angle, sub, text_box, unit)
 
 FIRST_LANE = 8.0  # mm from the line work to the first dimension line
@@ -45,7 +45,10 @@ def place_dimensions(layout, units, obstacles):
     z = layout.zoom
     size = max(2.0, TEXT * z)
     all_items, dims = [], []
-    for run in graph.runs:
+    placed = Obstacles()  # dimensions so far: crossing one is worse than crossing a pipe
+    # Short runs (branches) first: they have little room to move, while a
+    # long header can step out a lane to let a branch dimension sit beside it.
+    for run in sorted(graph.runs, key=lambda r: _run_length(graph, r)):
         pairs = _spans(graph, layout, run)
         if not pairs:
             continue
@@ -56,19 +59,25 @@ def place_dimensions(layout, units, obstacles):
             for side in (-1.0, 1.0):
                 off = side * (FIRST_LANE + lane * LANE_STEP) * z
                 items, texts, lines = _chain(layout, pairs, n, off, size, units)
-                hits = sum(obstacles.hits_segment(p, q) for p, q in lines)
-                hits += sum(obstacles.hits_box(text_box(t)) for t in texts)
+                hits = sum(obstacles.hits_segment(p, q) + 2 * placed.hits_segment(p, q) for p, q in lines)
+                hits += sum(obstacles.hits_box(text_box(t)) + 2 * placed.hits_box(text_box(t)) for t in texts)
                 if best is None or hits < best[0]:
                     best = (hits, items)
                 if hits == 0:
                     break
             if best[0] == 0:
                 break
-        obstacles.add_drawing([it for it in best[1] if not (isinstance(it, Line) and it.dash)])
+        solid = [it for it in best[1] if not (isinstance(it, Line) and it.dash)]
+        obstacles.add_drawing(solid)
+        placed.add_drawing(solid)
         all_items.extend(best[1])
         dims.extend(Dimension(a, b, value, iso_format.length_text(value, units))
                     for a, b, value in pairs)
     return all_items, dims
+
+
+def _run_length(graph, run):
+    return g.dist(graph.nodes[run["nodes"][0]].pos, graph.nodes[run["nodes"][-1]].pos)
 
 
 def slope_text(direction):
@@ -170,7 +179,8 @@ def roll_info(graph, comp_index):
     ref = min(range(2), key=lambda i: _off_axis(outward[i]))
     weld = graph.other(options[ref], centre)
     return {"angle": angle, "centre": centre, "weld": weld,
-            "axis": g.scale(outward[ref], -1.0), "rolled": outward[1 - ref]}
+            "axis": g.scale(outward[ref], -1.0), "rolled": outward[1 - ref],
+            "rolled_edge": options[1 - ref].id}
 
 
 def roll_angle(graph, comp_index):
@@ -222,7 +232,7 @@ def place_rolls(layout, obstacles):
         if comp.keyword not in ("ELBOW", "BEND", "TEE"):
             continue
         info = roll_info(graph, ci)
-        if info is None or info["angle"] < ROLL_MIN_DEG:
+        if info is None or info["angle"] < ROLL_MIN_DEG or _shown_elsewhere(graph, info["rolled_edge"]):
             continue
         symbol = roll_symbol(layout, info, z)
         obstacles.add_drawing(symbol)
@@ -243,6 +253,52 @@ def place_rolls(layout, obstacles):
     return items
 
 
+def _shown_elsewhere(graph, edge_id):
+    """True when the rolled leg's deviation is already on the drawing: its run
+    is skewed (skew triangle) or carries a sloped pipe (slope note)."""
+    for run in graph.runs:
+        if edge_id in run["edges"]:
+            edges = [graph.edges[i] for i in run["edges"]]
+            return not run["axis"] or any(e.slope is not None and e.role == "pipe" for e in edges)
+    return False
+
+
+def place_skew_offsets(layout, units, obstacles):
+    """The true offset beside each leg of every skew triangle."""
+    from . import iso_symbols
+    z = layout.zoom
+    size = iso_symbols.skew_text_size(layout)
+    items = []
+    for mark in iso_symbols.skew_marks(layout, units):
+        legs = mark["legs"]
+        for i, (a, b, value, centroid) in enumerate(legs):
+            u = unit(sub(b, a))
+            # The first leg starts on the pipe and the last ends on it: keep
+            # their labels towards the far end.
+            mid = lerp(a, b, 0.62 if i == 0 else 0.38 if i == len(legs) - 1 else 0.5)
+            out = unit(sub(mid, centroid))
+            n = perp(u)
+            if n[0] * out[0] + n[1] * out[1] < 0:
+                n = mul(n, -1.0)
+            best = None
+            # Outside the triangle first; inside (over the hatching) only if that is clearer.
+            for side, gap in ((1.0, 0.8), (1.0, 2.5), (1.0, 5.0), (-1.0, 0.8), (-1.0, 2.5), (1.0, 8.0)):
+                m = mul(n, side)
+                text = Text(add(mid, mul(m, gap * z)), iso_format.length_text(value, units), size,
+                            readable_angle(u))
+                up = _text_up(text.angle)
+                if up[0] * m[0] + up[1] * m[1] < 0:
+                    text.pos = add(text.pos, mul(m, size))  # glyphs grow away from the leg
+                hits = obstacles.hits_box(text_box(text))
+                if best is None or hits < best[0]:
+                    best = (hits, text)
+                if hits == 0:
+                    break
+            obstacles.add_drawing([best[1]])
+            items.append(best[1])
+    return items
+
+
 TAKE_OUT_FITTINGS = {"TEE", "REDUCER-CONCENTRIC", "REDUCER-ECCENTRIC", "ELBOW", "BEND"}
 
 
@@ -251,6 +307,7 @@ def _spans(graph, layout, run):
     order = {nid: i for i, nid in enumerate(run["nodes"])}
     edges = [(sorted((order[e.a], order[e.b])), e) for e in (graph.edges[i] for i in run["edges"])]
     run_has_pipe = any(e.role == "pipe" for _span, e in edges)
+    along = _true_run_direction(run, [e for _span, e in edges])
     wps = [nid for nid in run["nodes"] if graph.nodes[nid].work_point and nid in layout.pos]
     spans = []
     for a, b in zip(wps, wps[1:]):
@@ -261,11 +318,23 @@ def _spans(graph, layout, run):
             graph.pcf.components[e.comp].keyword in TAKE_OUT_FITTINGS for e in inside)
         if not (has_pipe or take_out):
             continue  # valves or a branch stack: their catalog dimensions fix this span
-        # Measured along the run, so an eccentric reducer's offset does not count.
-        value = abs(g.dot(g.sub(graph.nodes[b].pos, graph.nodes[a].pos), run["direction"]))
+        # Measured along the run, so an eccentric reducer's offset does not count;
+        # along its true direction, so a sloped run gets its true length.
+        value = abs(g.dot(g.sub(graph.nodes[b].pos, graph.nodes[a].pos), along))
         if value >= MIN_VALUE:
             spans.append((a, b, value))
     return spans
+
+
+def _true_run_direction(run, edges):
+    """Direction of a run as built: a sloped run is drawn on its axis, but its
+    pipe keeps the true direction in edge.slope."""
+    d = run["direction"]
+    for e in sorted(edges, key=lambda e: -e.length):
+        if e.slope is not None and e.role == "pipe":
+            s = e.slope if g.dot(e.slope, e.direction) > 0 else g.scale(e.slope, -1.0)
+            return s if g.dot(e.direction, d) > 0 else g.scale(s, -1.0)
+    return d
 
 
 def _chain(layout, pairs, n, off, size, units):

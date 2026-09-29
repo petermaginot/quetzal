@@ -165,15 +165,16 @@ class BranchStackTests(unittest.TestCase):
 
 class KickerTests(unittest.TestCase):
     """A kicker rising 0.42 deg (1:134) to meet an eccentric reducer's offset:
-    below the 1 deg drawing tolerance, so it is drawn level, but the slope and
-    the elbow's roll must still be called out."""
+    below the 1 deg drawing tolerance, so it is drawn level, but the slope must
+    still be called out.  The elbow's 0.42 deg roll is what makes that slope,
+    so the slope note is its only callout."""
 
     def setUp(self):
         path = os.path.join(os.path.dirname(__file__), "data", "kicker.pcf")
         with open(path, encoding="utf-8") as f:
             self.pf = pcf_model.parse(f.read())[0]
 
-    def test_slope_and_roll_called_out(self):
+    def test_slope_called_out_once(self):
         from iso import iso_dims
         g = iso_graph.build(self.pf)
         slopes = [iso_dims.slope_text(e.slope) for e in g.edges if e.slope and e.role == "pipe"]
@@ -182,7 +183,7 @@ class KickerTests(unittest.TestCase):
         self.assertAlmostEqual(iso_dims.roll_angle(g, elbow), 0.42, places=2)
         sheet = iso_build.build_sheet(self.pf)
         self.assertIn("SLOPE 1:134", sheet.svg)
-        self.assertIn("ROLL 0.42", sheet.svg)
+        self.assertNotIn("ROLL", sheet.svg)
 
     def test_no_false_callouts_on_square_lines(self):
         for name in ("foreign.pcf", "sample.pcf"):
@@ -224,7 +225,11 @@ class RollTests(unittest.TestCase):
         weld = g.nodes[info["weld"]].pos
         self.assertAlmostEqual(weld[1], 0.0)  # the (square) run, not the branch
         self.assertAlmostEqual(weld[2], 0.0)
-        self.assertIn("ROLL 1.00", iso_build.build_sheet(pf).svg)
+        # The rolled branch pipe is out of plumb, and its note says so; a
+        # roll callout would repeat it.
+        svg = iso_build.build_sheet(pf).svg
+        self.assertIn("OUT OF PLUMB 1.0", svg)
+        self.assertNotIn("ROLL", svg)
 
     def test_small_roll_ignored(self):
         self.assertNotIn("ROLL", iso_build.build_sheet(rolled_tee_pcf(0.2)).svg)
@@ -396,6 +401,7 @@ class SheetTests(unittest.TestCase):
         for x, y in pts:
             self.assertTrue(x0 <= x <= x1 and y0 <= y <= y1, (x, y))
         r = 3.0 * self.sheet.scale
+        pts = list(dict.fromkeys(pts))  # a gasket and its bolts share one balloon
         closest = min(math.dist(a, b) for i, a in enumerate(pts) for b in pts[i + 1:])
         self.assertGreaterEqual(closest, 2 * r)
 

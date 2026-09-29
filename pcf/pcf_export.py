@@ -79,7 +79,53 @@ def collect_pipelines(objects, single=False):
         doc_label = next(iter(lines.values()))[0].Document.Label
         name = next((n for n in lines if n != doc_label), doc_label)
         lines = {name: [o for members in lines.values() for o in members]}
+    elif len(lines) > 1:
+        _supports_to_their_pipes(lines)
     return lines
+
+
+SUPPORT_REACH = 150.0  # mm a support may sit off the pipe surface (shoe, clamp on a beam below)
+
+
+def _supports_to_their_pipes(lines):
+    """Move each support into the pipeline of the pipe it carries: supports
+    are often kept in a group of their own, which would give them a drawing
+    without their pipe."""
+    pipes = []
+    for name, members in lines.items():
+        for o in members:
+            if o.PType == "Pipe":
+                ends = [o.getGlobalPlacement().multVec(o.Placement.inverse().multVec(p))
+                        for p in (pCmd.portsPos(o) or [])]
+                if len(ends) == 2:
+                    pipes.append((name, ends[0], ends[1], float(o.OD) / 2.0))
+    for name in list(lines):
+        for o in list(lines[name]):
+            if o.PType != "Clamp":
+                continue
+            at = o.getGlobalPlacement().Base
+            best = None
+            for owner, a, b, radius in pipes:
+                off = _off_segment(at, a, b)
+                if off is not None and off <= radius + SUPPORT_REACH and (best is None or off < best[0]):
+                    best = (off, owner)
+            if best is not None and best[1] != name:
+                lines[name].remove(o)
+                lines[best[1]].append(o)
+    for name in [n for n, members in lines.items() if not members]:
+        del lines[name]
+
+
+def _off_segment(p, a, b):
+    """Distance from p to segment a-b, None when p is beyond either end."""
+    ab = b - a
+    den = ab.dot(ab)
+    if den < 1e-9:
+        return None
+    t = (p - a).dot(ab) / den
+    if t < -1e-6 or t > 1 + 1e-6:
+        return None
+    return (p - (a + ab * t)).Length
 
 
 # --------------------------------------------------------------------------

@@ -6,7 +6,8 @@ direction; only its paper length changes:
   - inline items and fitting legs get a fixed symbol length;
   - pipes get max(PIPE_MIN, k * sqrt(L)), so longer pipe stays longer.
 Clashes between segments are removed by stretching a pipe on the tree path
-between them; k is then fitted so the drawing fills the iso area.
+between them; k is then fitted so the drawing fills the iso area.  A closed
+loop is drawn true by lengthening pipes in the loop until it closes.
 """
 
 import math
@@ -35,6 +36,7 @@ MAX_ROUNDS = 80
 MAX_STRETCH = 6.0  # a pipe is never drawn more than this many times its normal length
 CLASHES_TRIED = 6  # clashes whose tree paths supply stretch candidates each round
 MARGIN = 25.0  # room left around the line work for dimensions and balloons
+MIN_ACROSS_DEG = 40.0  # a world direction closer than this to a line on paper is not "across" it
 
 
 def rotate_xy(v, quarter_turns):
@@ -129,6 +131,8 @@ class Layout:
     parent: dict = field(default_factory=dict)  # node id -> (parent node, edge id)
     clashes: list = field(default_factory=list)  # (edge id, edge id)
     loops: list = field(default_factory=list)  # edge ids not in the spanning tree
+    open_loops: list = field(default_factory=list)  # loop edges still drawn out of true direction
+    extra: dict = field(default_factory=dict)  # edge id -> paper mm added to close loops
 
     def screen_dir(self, edge):
         return unit2(project(edge.direction, self.rotation))
@@ -139,7 +143,20 @@ class Layout:
         if a3 is None:
             d = self.screen_dir(edge)
             return (-d[1], d[0])
-        return unit2(project(a3, self.rotation))
+        return self.perpendicular(edge, a3)
+
+    def perpendicular(self, edge, world):
+        """Screen direction of the world vector, for drawing off edge; the
+        screen perpendicular on its side when the two nearly coincide on paper
+        (e.g. up and a horizontal line at 45 degrees in plan)."""
+        d = self.screen_dir(edge)
+        v = unit2(project(world, self.rotation))
+        if v != (0.0, 0.0) and abs(d[0] * v[0] + d[1] * v[1]) <= math.cos(math.radians(MIN_ACROSS_DEG)):
+            return v
+        p = (-d[1], d[0])
+        if p[0] * v[0] + p[1] * v[1] < 0 or (v == (0.0, 0.0) and p[1] < 0):
+            p = (-p[0], -p[1])
+        return p
 
     def bbox(self):
         xs = [p[0] for p in self.pos.values()]
@@ -161,10 +178,144 @@ def paper_length(layout, edge):
         base = OLET_LEN * z
     else:
         base = SYMBOL_LEN.get(comp.keyword, GENERIC_INLINE_LEN) * z
-    return base * layout.stretch.get(edge.id, 1.0)
+    return base * layout.stretch.get(edge.id, 1.0) + layout.extra.get(edge.id, 0.0)
+
+
+LOOP_ROUNDS = 4
+LOOP_TOL_DEG = 0.5  # a loop edge this close to its true direction is closed
 
 
 def place(layout):
+    """Positions from the spanning tree, then pipes lengthened so that every
+    loop closes with its edges in true direction."""
+    layout.extra = {}
+    _place_tree(layout)
+    for _ in range(LOOP_ROUNDS if layout.loops else 0):
+        if not _close_loops(layout):
+            break
+        _place_tree(layout)
+    layout.open_loops = [eid for eid in layout.loops if _loop_error(layout, eid) > LOOP_TOL_DEG]
+    return layout
+
+
+def _loop_error(layout, eid):
+    """Degrees between a loop edge as drawn and its true screen direction."""
+    e = layout.graph.edges[eid]
+    p, q = layout.segment(e)
+    d = unit2((q[0] - p[0], q[1] - p[1]))
+    if d == (0.0, 0.0):
+        return 180.0
+    w = layout.screen_dir(e)
+    return math.degrees(math.acos(max(-1.0, min(1.0, d[0] * w[0] + d[1] * w[1]))))
+
+
+def _tree_steps(layout, a, b):
+    """[(edge id, sign)] along the spanning tree from node a to node b; sign is
+    +1 where the step runs from the edge's a end to its b end."""
+    def chain(n):
+        out = []
+        while n is not None:
+            out.append(n)
+            n = layout.parent.get(n, (None, None))[0]
+        return out
+
+    ca, cb = chain(a), chain(b)
+    common = next((n for n in ca if n in set(cb)), None)
+    if common is None:
+        return None
+    graph = layout.graph
+    steps = []
+    for n in ca[:ca.index(common)]:  # up from a: child -> parent
+        eid = layout.parent[n][1]
+        steps.append((eid, 1.0 if graph.edges[eid].a == n else -1.0))
+    down = []
+    for n in cb[:cb.index(common)]:  # down to b: parent -> child
+        eid = layout.parent[n][1]
+        down.append((eid, 1.0 if graph.edges[eid].b == n else -1.0))
+    return steps + down[::-1]
+
+
+def _close_loops(layout):
+    """Add paper length to pipes in each open loop so it closes; True if anything changed."""
+    graph = layout.graph
+    z = layout.zoom
+    changed = False
+    for eid in layout.loops:
+        if _loop_error(layout, eid) <= LOOP_TOL_DEG:
+            continue
+        e = graph.edges[eid]
+        steps = _tree_steps(layout, e.a, e.b)
+        if not steps:
+            continue
+        pa, pb = layout.pos[e.a], layout.pos[e.b]
+        D = (pb[0] - pa[0], pb[1] - pa[1])  # tree vector a -> b
+        w = layout.screen_dir(e)
+        free = e.role == "pipe"  # its own length may be whatever closes the loop
+        want = PIPE_MIN * z if free else paper_length(layout, e)
+        cands = []
+        for sid, sign in steps:
+            f = graph.edges[sid]
+            if f.role == "pipe":
+                u = layout.screen_dir(f)
+                cands.append((sid, (sign * u[0], sign * u[1]), paper_length(layout, f)))
+        best = _loop_fix(D, w, want, free, cands, PIPE_MIN * z)
+        if best:
+            for sid, delta in best:
+                layout.extra[sid] = layout.extra.get(sid, 0.0) + delta
+            changed = True
+    return changed
+
+
+def _loop_fix(D, w, want, free, cands, min_len):
+    """[(edge id, paper mm to add)] that makes D run along w (free: at least
+    `want` long; fixed: exactly `want` long).  Extending beats shortening,
+    then the smallest change wins; one pipe is used when that is enough."""
+    n = (-w[1], w[0])
+    options = []
+
+    def ok(deltas):
+        for (sid, _v, length), dl in deltas:
+            if length + dl < min_len:
+                return False
+        return True
+
+    def cost(deltas):
+        return sum(abs(dl) + 3.0 * max(0.0, -dl) for _c, dl in deltas)
+
+    def along(deltas):
+        return D[0] * w[0] + D[1] * w[1] + sum(dl * (v[0] * w[0] + v[1] * w[1]) for (_s, v, _l), dl in deltas)
+
+    if free:
+        # One equation: no component across w.
+        side = D[0] * n[0] + D[1] * n[1]
+        for c in cands:
+            k = c[1][0] * n[0] + c[1][1] * n[1]
+            if abs(k) < 0.05:
+                continue
+            deltas = [(c, -side / k)]
+            if ok(deltas) and along(deltas) >= want:
+                options.append(deltas)
+    # Two equations: D + sum(delta v) = want * w exactly (also rescues a free
+    # loop edge that would otherwise be drawn too short or backwards).
+    target = (want * w[0] - D[0], want * w[1] - D[1])
+    for i, c1 in enumerate(cands):
+        for c2 in cands[i + 1:]:
+            (a1, b1), (a2, b2) = c1[1], c2[1]
+            det = a1 * b2 - a2 * b1
+            if abs(det) < 0.05:
+                continue
+            d1 = (target[0] * b2 - target[1] * a2) / det
+            d2 = (a1 * target[1] - b1 * target[0]) / det
+            deltas = [(c1, d1), (c2, d2)]
+            if ok(deltas):
+                options.append(deltas)
+    if not options:
+        return None
+    best = min(options, key=cost)
+    return [(c[0], dl) for c, dl in best]
+
+
+def _place_tree(layout):
     """Positions from the spanning tree; disconnected pieces side by side."""
     graph = layout.graph
     layout.pos, layout.parent, layout.loops = {}, {}, []
@@ -315,18 +466,25 @@ def resolve_clashes(layout):
             break
         best = None
         for eid in _stretch_candidates(layout, clashes):
-            factor = layout.stretch.get(eid, 1.0) * 1.35 + 0.15
-            if factor > MAX_STRETCH:
-                continue
-            trial = dict(layout.stretch)
-            trial[eid] = factor
-            saved = layout.stretch
-            layout.stretch = trial
-            place(layout)
-            score = _badness(layout, find_clashes(layout))
-            layout.stretch = saved
-            if best is None or score < best[0]:
-                best = (score, trial)
+            now = layout.stretch.get(eid, 1.0)
+            # A small step first; for pipe and olets (drawn at their own size,
+            # the rest as line), bigger ones get a line right across another
+            # that no small step would clear (e.g. a branch doubling back).
+            steps = (now * 1.35 + 0.15, now * 2.5 + 0.5, MAX_STRETCH)
+            if layout.graph.edges[eid].role not in ("pipe", "olet"):
+                steps = steps[:1]
+            for factor in steps:
+                if factor > MAX_STRETCH or factor <= now:
+                    continue
+                trial = dict(layout.stretch)
+                trial[eid] = factor
+                saved = layout.stretch
+                layout.stretch = trial
+                place(layout)
+                score = _badness(layout, find_clashes(layout))
+                layout.stretch = saved
+                if best is None or score < best[0]:
+                    best = (score, trial)
         if best is None or best[0] >= current:
             break  # no stretch helps: accept the remaining clashes
         layout.stretch, current = best[1], best[0]

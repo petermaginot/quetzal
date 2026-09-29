@@ -1692,7 +1692,7 @@ def makePypeLine2(
     # create the pypeLine group
     if not pl:
         a = FreeCAD.ActiveDocument.addObject("Part::FeaturePython", lab)
-        pFeatures.PypeLine2(a, DN, PRating, OD, thk, BR, lab)
+        pFeatures.PypeLine2(a, PRating, DN, OD, thk, BR, lab)
         if FreeCAD.GuiUp:
             pFeatures.ViewProviderPypeLine(a.ViewObject)  # a.ViewObject.Proxy=0
             a.ViewObject.ShapeColor = color

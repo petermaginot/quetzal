@@ -57,18 +57,19 @@ def build_sheet(pcf_file, options=None, sheet_label="1 OF 1", tables=True):
     layout = iso_layout.layout_graph(graph, x1 - x0, y1 - y0, opt.rotation, opt.compression)
     if layout.clashes:
         warnings.append("%d line clashes could not be removed" % len(layout.clashes))
-    if layout.loops:
-        warnings.append("%d closed loop(s) drawn out of true direction" % len(layout.loops))
+    if layout.open_loops:
+        warnings.append("%d closed loop(s) drawn out of true direction" % len(layout.open_loops))
     if layout.zoom < 1.0:
         warnings.append("symbols shrunk to %.0f%%: the line is long for one sheet, consider "
                         "splitting it into several pipelines" % (layout.zoom * 100))
 
-    paper, anchors = iso_symbols.draw(layout)
+    paper, anchors = iso_symbols.draw(layout, opt.units)
     obstacles = Obstacles()
     obstacles.add_drawing(paper)
     dim_items, dimensions = iso_dims.place_dimensions(layout, opt.units, obstacles)
     dim_items += iso_dims.place_slopes(layout, obstacles)
     dim_items += iso_dims.place_rolls(layout, obstacles)
+    dim_items += iso_dims.place_skew_offsets(layout, opt.units, obstacles)
     bom = iso_bom.bom_items(pcf_file, opt.units, opt.size_system)
     balloon_items, balloons = iso_bom.place_balloons(bom, anchors, layout, obstacles)
     paper = paper + dim_items + balloon_items

@@ -5,7 +5,9 @@ A PcfFile becomes a graph: nodes are distinct points (end, centre and branch
 points, merged within MERGE_TOL), edges are straight legs of components.
 Pipes and inline items give one edge; elbows give two legs through their
 centre point; tees give three; olets give one leg from the header centre
-line to the branch end.  Caps, bolts and supports become markers.
+line to the branch end.  Caps, bolts and supports become markers, and so do
+two-ended items of zero length (e.g. a lap-joint flange modelled without its
+stub end), which are drawn at their node.
 """
 
 import math
@@ -17,10 +19,14 @@ MERGE_TOL = 1.0  # mm
 AXIS_TOL_DEG = 1.0
 SLOPE_TOL_DEG = 5.0  # lines this close to an axis are sloped, drawn on the axis
 SLOPE_MIN_DEG = 0.01  # below this (about 1:5700) a deviation is numerical noise, not a slope
+SUPPORT_REACH = 150.0  # mm a support may sit off the pipe surface (shoe, clamp on a beam below)
 
 INLINE = {"FLANGE", "FLANGE-BLIND", "VALVE", "REDUCER-CONCENTRIC", "REDUCER-ECCENTRIC",
           "GASKET", "COUPLING", "UNION"}
 FACE_NEIGHBOURS = {"GASKET", "FLANGE", "FLANGE-BLIND", "VALVE"}
+# Inline items whose socket-weld or screwed ends are work points (a socket-weld
+# flange is still dimensioned to its face).
+SOCKET_INLINE = {"VALVE", "COUPLING", "UNION", "INSTRUMENT", "FILTER", "MISC-COMPONENT"}
 AXES = {"X": (1.0, 0.0, 0.0), "Y": (0.0, 1.0, 0.0), "Z": (0.0, 0.0, 1.0)}
 
 # End kinds of a component end: BW / SW / SC weld or screwed ends, FACE for a
@@ -54,7 +60,7 @@ class Edge:
 
 @dataclass
 class Marker:
-    kind: str  # cap | bolt | support
+    kind: str  # cap | bolt | support | point (a zero-length inline item)
     comp: int
     node: int = -1
     edge: int = -1
@@ -191,7 +197,13 @@ def build(pcf_file):
         n1.ends.append((ci, k1))
         n2.ends.append((ci, k2))
         e = add_edge(ci, n1, n2, "pipe" if kw == "PIPE" else "inline")
-        if e is not None and kw == "REDUCER-ECCENTRIC":
+        if e is None:
+            if kw == "PIPE":
+                graph.skipped.append((ci, "pipe of zero length"))
+            else:
+                graph.markers.append(Marker("point", ci, node=n1.id, pos=n1.pos))
+            continue
+        if kw == "REDUCER-ECCENTRIC":
             _eccentric(e, c, n1, n2)
 
     _split_at_interior_nodes(graph)
@@ -294,16 +306,24 @@ def _split_at_interior_nodes(graph):
 
 def _snap_markers(graph):
     """Attach bolts and supports to the edge they sit on.  Supports are often
-    given at the pipe bottom, so allow up to the nominal bore off the axis."""
+    given at the pipe bottom or below it (a shoe, a clamp on a beam), so allow
+    the pipe's bore plus SUPPORT_REACH off its axis; the support's own size is
+    no guide (a beam clamp's may be a product code, i.e. bore 0).  Markers that
+    sit on no line are reported in graph.skipped."""
     inch = graph.pcf.units_bore.upper().startswith("IN")
+    mm = 25.4 if inch else 1.0
     for m in graph.markers:
-        if m.kind == "cap":
+        if m.kind in ("cap", "point"):
             continue
-        bore = graph.pcf.components[m.comp].co_ords.bore * (25.4 if inch else 1.0)
-        tol = max(MERGE_TOL, bore)
+        comp = graph.pcf.components[m.comp]
+        own = comp.co_ords.bore * mm
         best = None
         for e in graph.edges:
             a, b = graph.nodes[e.a].pos, graph.nodes[e.b].pos
+            line_bore = max((p.bore for p in graph.pcf.components[e.comp].end_points), default=0.0) * mm
+            tol = max(MERGE_TOL, own, line_bore)
+            if m.kind == "support":
+                tol += SUPPORT_REACH
             t = g.segment_param(m.pos, a, b, tol)
             if t is not None:
                 off = g.dist(g.add(a, g.scale(g.sub(b, a), t)), m.pos)
@@ -311,6 +331,8 @@ def _snap_markers(graph):
                     best = (off, e.id, t)
         if best is not None:
             m.edge, m.t = best[1], best[2]
+        else:
+            graph.skipped.append((m.comp, "%s is not on any line of this pipeline" % comp.keyword.lower()))
 
 
 def _classify_nodes(graph):
@@ -329,7 +351,11 @@ def _classify_nodes(graph):
         open_end = edge_count.get(n.id, 0) == 1 and "CLOSED" not in kinds
         # Both ends of a reducer, so the pipe on each side gets its own dimension.
         reducer = any(graph.pcf.components[c].keyword.startswith("REDUCER") for c in comps)
-        n.work_point = n.centre or face or open_end or reducer or _turns(graph, n.id)
+        # Socket-weld and screwed inline items (couplings, unions, valves) are
+        # located by their ends, as flanged ones are by their faces.
+        socket = any(k in ("SW", "SC") and graph.pcf.components[c].keyword in SOCKET_INLINE
+                     for c, k in n.ends)
+        n.work_point = n.centre or face or open_end or reducer or socket or _turns(graph, n.id)
     # A gasket's two faces are one joint: dimension to the first only.
     for e in graph.edges:
         if graph.pcf.components[e.comp].keyword == "GASKET":
