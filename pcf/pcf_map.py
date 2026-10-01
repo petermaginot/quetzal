@@ -38,6 +38,8 @@ KEYWORDS = {
     "Outlet": "OLET",
     "SocketCoupling": "COUPLING",
     "SocketUnion": "UNION",
+    "HexBushing": "REDUCER-CONCENTRIC",
+    "HexPlug": "CAP",
     "Clamp": "SUPPORT",
 }
 
@@ -63,6 +65,10 @@ PTYPES = {
 
 # Socket-weld / screwed variants of the butt-weld PTypes.
 SOCKET_PTYPES = {"Elbow": "SocketEll", "Tee": "SocketTee", "Cap": "SocketCap"}
+
+# SKEY family prefix -> PType, for families that share a PCF keyword with
+# another Quetzal object (a bushing is a reducer, a plug is a cap).
+SKEY_PTYPES = {("REDUCER-CONCENTRIC", "BU"): "HexBushing", ("CAP", "PL"): "HexPlug"}
 
 FLANGE_SKEYS = {"WN": "FLWN", "SO": "FLSO", "SW": "FLSW", "LJ": "FLLJ", "BL": "FLBL"}
 FLANGE_TYPES = {v: k for k, v in FLANGE_SKEYS.items()}
@@ -135,6 +141,10 @@ def keyword_and_skey(obj):
         return kw, "CP" + end
     if ptype == "SocketUnion":
         return kw, "UN" + end
+    if ptype == "HexBushing":
+        return kw, "BU" + end
+    if ptype == "HexPlug":
+        return kw, "PL" + end
     return kw, ""
 
 
@@ -156,6 +166,9 @@ def valve_family_from_skey(skey):
 
 def ptype_for(comp):
     """Quetzal PType a PCF component should become, or None if unsupported."""
+    special = SKEY_PTYPES.get((comp.keyword, comp.skey[:2].upper()))
+    if special:
+        return special
     ptype = PTYPES.get(comp.keyword)
     if ptype in SOCKET_PTYPES and comp.skey[2:4] in ("SW", "SC"):
         return SOCKET_PTYPES[ptype]

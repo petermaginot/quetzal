@@ -22,6 +22,7 @@ DEFAULT_SCHEDULE = "SCH-STD"
 DEFAULT_CLASS = "150lb"
 DEFAULT_SOCKET_CLASS = "3000lb"
 SOCKET_CLASSES = ("3000lb", "6000lb", "9000lb")
+THREADED_CLASSES = ("2000lb", "3000lb", "6000lb")
 UNION_COLUMNS = ["PSize", "OD", "A", "C", "D", "E", "Conn"]
 
 
@@ -175,6 +176,18 @@ def _socket_class(comp, ctx):
     return guess_class(ctx.text_for(comp), SOCKET_CLASSES) or DEFAULT_SOCKET_CLASS
 
 
+def _socket_table(family, comp, ctx):
+    """(file name, class) of the socket-weld or, for a screwed SKEY, threaded
+    table of a fitting family, e.g. ("Elbow_3000lb_TH.csv", "3000lb")."""
+    if comp.skey[2:4].upper() == "SC":
+        cls = guess_class(ctx.text_for(comp), THREADED_CLASSES) or DEFAULT_SOCKET_CLASS
+        name = "%s_%s_TH.csv" % (family, cls)
+        if os.path.exists(os.path.join(TABLES_DIR, name)):
+            return name, cls
+    cls = _socket_class(comp, ctx)
+    return "%s_%s_SW.csv" % (family, cls), cls
+
+
 def resolve(ptype, comp, ctx):
     fn = _RESOLVERS.get(ptype)
     if fn is None:
@@ -213,13 +226,15 @@ def _elbow(comp, ctx):
 
 def _socket_elbow(comp, ctx):
     dn = ctx.dn(comp.end_points[0])
-    cls = _socket_class(comp, ctx)
-    row = find_row("Elbow_%s_SW.csv" % cls, PSize=dn)
-    if not row:
-        raise ResolveError("no socket elbow data for %s %s" % (dn, cls))
+    fname, cls = _socket_table("Elbow", comp, ctx)
     angle = 90.0
     if comp.centre_point is not None:
         angle = bend_angle_and_radius(comp)[0]
+    # nearest tabulated bend angle (the tables carry 90 and 45 rows)
+    rows = [r for r in table(fname) if r.get("PSize") == dn]
+    row = min(rows, key=lambda r: abs(num(r.get("BendAngle", 90)) - angle)) if rows else None
+    if not row:
+        raise ResolveError("no socket elbow data for %s %s" % (dn, cls))
     props = {k: num(row[k]) for k in ("OD", "A", "C", "D", "E", "G")}
     props.update(PSize=dn, PRating=cls, BendAngle=angle,
                  Conn=pcf_map.conn_from_skey(comp.skey))
@@ -251,8 +266,8 @@ def _tee(comp, ctx):
 
 def _socket_tee(comp, ctx):
     dn, dn2 = _tee_sizes(comp, ctx)
-    cls = _socket_class(comp, ctx)
-    row = find_row("Tee_%s_SW.csv" % cls, PSize=dn, PSizeBranch=dn2)
+    fname, cls = _socket_table("Tee", comp, ctx)
+    row = find_row(fname, PSize=dn, PSizeBranch=dn2)
     if not row:
         raise ResolveError("no socket tee data for %s x %s %s" % (dn, dn2, cls))
     props = {k: num(row[k]) for k in ("OD", "OD2", "A", "C", "D", "E", "G")}
@@ -302,8 +317,8 @@ def _cap(comp, ctx):
 
 def _socket_cap(comp, ctx):
     dn = ctx.dn(comp.end_points[0])
-    cls = _socket_class(comp, ctx)
-    row = find_row("Cap_%s_SW.csv" % cls, PSize=dn)
+    fname, cls = _socket_table("Cap", comp, ctx)
+    row = find_row(fname, PSize=dn)
     if not row:
         raise ResolveError("no socket cap data for %s %s" % (dn, cls))
     props = {k: num(row[k]) for k in ("OD", "A", "C", "E")}
@@ -469,10 +484,13 @@ def _outlet(comp, ctx):
     if comp.centre_point is None or not comp.branch_points:
         raise ResolveError("olet without CENTRE-POINT/BRANCH1-POINT")
     dn = ctx.dn(comp.branch_points[0])
-    conn = "SW" if comp.skey[2:4] in ("SW", "SC") else "BW"
-    if conn == "SW":
+    conn = {"SW": "SW", "SC": "TH"}.get(comp.skey[2:4], "BW")
+    if conn != "BW":
         rating = _socket_class(comp, ctx)
         fname = "Outlet_%s.csv" % rating
+        if conn == "TH" and table("Outlet_%s_TH.csv" % rating):
+            fname = "Outlet_%s_TH.csv" % rating
+            rating += "_TH"
     else:
         sched = _schedule(comp, ctx).replace("SCH-", "Sch-")
         fname = "Outlet_%s.csv" % sched
@@ -498,8 +516,8 @@ def _outlet(comp, ctx):
 
 def _coupling(comp, ctx):
     dn, dn2 = ctx.dn(comp.end_points[0]), ctx.dn(comp.end_points[1])
-    cls = _socket_class(comp, ctx)
-    row = find_row("Coupling_%s_SW.csv" % cls, PSize=dn, PSize2=dn2)
+    fname, cls = _socket_table("Coupling", comp, ctx)
+    row = find_row(fname, PSize=dn, PSize2=dn2)
     if not row:
         raise ResolveError("no coupling data for %s x %s %s" % (dn, dn2, cls))
     props = {k: num(row[k]) for k in ("OD", "OD2", "A", "C", "D", "E")}
@@ -509,13 +527,33 @@ def _coupling(comp, ctx):
 
 def _union(comp, ctx):
     dn = ctx.dn(comp.end_points[0])
-    cls = _socket_class(comp, ctx)
-    table("Union_%s_SW.csv" % cls, header=UNION_COLUMNS)
-    row = find_row("Union_%s_SW.csv" % cls, PSize=dn)
+    fname, cls = _socket_table("Union", comp, ctx)
+    table(fname, header=UNION_COLUMNS)
+    row = find_row(fname, PSize=dn)
     if not row:
         raise ResolveError("no union data for %s %s" % (dn, cls))
     props = {k: num(row[k]) for k in ("OD", "A", "C", "D", "E")}
     props.update(PSize=dn, PRating=cls, Conn=pcf_map.conn_from_skey(comp.skey))
+    return props
+
+
+def _hex_bushing(comp, ctx):
+    dn, dn2 = ctx.dn(comp.end_points[0]), ctx.dn(comp.end_points[1])
+    row = find_row("Bushing_B16.11.csv", PSize=dn, PSize2=dn2)
+    if not row:
+        raise ResolveError("no hex bushing data for %s x %s" % (dn, dn2))
+    props = {k: num(row[k]) for k in ("OD", "OD2", "F", "C", "L", "L2", "D")}
+    props.update(PSize=dn, PSize2=dn2, PRating="B16.11", Conn="TH")
+    return props
+
+
+def _hex_plug(comp, ctx):
+    dn = ctx.dn(comp.end_points[0])
+    row = find_row("Plug_B16.11.csv", PSize=dn)
+    if not row:
+        raise ResolveError("no hex plug data for %s" % dn)
+    props = {k: num(row[k]) for k in ("OD", "F", "C", "L")}
+    props.update(PSize=dn, PRating="B16.11", Conn="TH")
     return props
 
 
@@ -535,4 +573,6 @@ _RESOLVERS = {
     "Outlet": _outlet,
     "SocketCoupling": _coupling,
     "SocketUnion": _union,
+    "HexBushing": _hex_bushing,
+    "HexPlug": _hex_plug,
 }

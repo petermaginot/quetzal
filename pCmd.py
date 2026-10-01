@@ -169,7 +169,8 @@ def getSelectedPortDimensions():
     connecting pipe OD and OD-based matching would produce wrong results.
     The affected types are:
       - Outlet with EndType "SocketWeld" or "ThreadedEnd"
-      - SocketCap, SocketEll, SocketTee, SocketCoupling, SocketUnion
+      - SocketCap, SocketEll, SocketTee, SocketCoupling, SocketUnion,
+        HexBushing, HexPlug
         (Conn property is always SW or TH)
       - Valve with Conn SW or TH
       - Flange with FlangeType BL, SW, SO, or LJ
@@ -232,8 +233,13 @@ def getSelectedPortDimensions():
 
         # ── Socket/threaded fittings: Conn is always SW or TH ─────────────
         if ptype in ("SocketCap", "SocketEll", "SocketTee",
-                     "SocketCoupling", "SocketUnion"):
+                     "SocketCoupling", "SocketUnion", "HexPlug"):
             return None, None, None, psize
+        if ptype == "HexBushing":
+            # the small (female) end is the one a new fitting normally joins
+            if _closest_port(obj, sx) == 0:
+                return None, None, None, psize
+            return None, None, None, obj.PSize2
 
         # ── Valve: suppress OD when SW or TH ──────────────────────────────
         if ptype == "Valve":
@@ -2868,9 +2874,9 @@ def makeOutlet(propList=[], pos=None, rot=None, carrierOD=0.0):
       [3]  thk      float  wall thickness at pipe end    (mm)
       [4]  A        float  height above run-pipe surface (mm)
       [5]  B        float  outer diameter at base        (mm)
-      [6]  endType  str    "BW" or "SW"  (from CSV Conn column)
+      [6]  endType  str    "BW", "SW" or "TH"  (from CSV Conn column)
       [7]  angle    int    0 (straight) | 45 (lateral)
-      [8]  E        float  socket depth (SW only)
+      [8]  E        float  height of the socket / thread bottom (SW and TH only)
 
     pos       : FreeCAD.Vector    - world position of the fitting base
     rot       : FreeCAD.Rotation  - full world rotation (replaces the old Z-only arg)
@@ -3314,7 +3320,7 @@ def doSocketTee(rating="3000lb", propList=["DN25", "DN25", 33.4, 33.4, 35.0, 5.0
     plist = []
     selex = FreeCADGui.Selection.getSelectionEx()
     if len(selex) == 0:  # no selection -> insert one tee at origin
-        plist.append(makeSocketTee(propList, insertOnBranch=insertOnBranch))
+        plist.append(makeSocketTee(propList, insertOnBranch=insertOnBranch, rating=rating))
     else: #something selected. Use the first selected object in the list of selections
         selex = FreeCADGui.Selection.getSelectionEx()[0]
         usablePorts = False
@@ -3606,3 +3612,65 @@ def doSocketUnion(propList=["DN25", 33.4, 35.0, 5.0, 25.9, 22.0, "SW"],
     """
     return _doSocketStraight(
         makeSocketUnion, "Insert socket union", propList, pypeline)
+
+
+# ── public API: HexBushing / HexPlug ─────────────────────────────────────────
+
+def makeHexBushing(propList=[], pos=None, Z=None):
+    """Add a HexBushing object.
+    makeHexBushing(propList, pos, Z)
+      propList is one optional list with 10 elements:
+        PSize  (string): nominal diameter of the male (large) end, port 0
+        PSize2 (string): nominal diameter of the female (small) end, port 1
+        OD     (float):  large pipe OD
+        OD2    (float):  small pipe OD
+        F      (float):  hex width across flats
+        C      (float):  hex height
+        L      (float):  male end length (hex to tip)
+        L2     (float):  female thread engagement
+        D      (float):  through-bore diameter
+        Conn   (string): connection type ("TH")
+      pos (vector): world position of port[0] (male thread tip); default = 0,0,0
+      Z   (vector): desired outward direction of port[0]; default = 0,0,1
+    Remember: property PRating must be defined afterwards.
+    """
+    return _makeSocketStraight(
+        pFeatures.HexBushing, "HexBushing",
+        "Quetzal_BushingPlug", propList, 10, pos, Z)
+
+
+def doHexBushing(propList=["DN25", "DN15", 33.4, 21.34, 35.0, 6.0, 19.0, 10.84, 15.34, "TH"],
+                 pypeline=None):
+    """Insert a HexBushing, aligning its male end (port 0) to the selected port
+    when possible.  propList as for makeHexBushing.
+    pypeline = string (optional PypeLine label)
+    """
+    return _doSocketStraight(
+        makeHexBushing, "Insert hex bushing", propList, pypeline)
+
+
+def makeHexPlug(propList=[], pos=None, Z=None):
+    """Add a HexPlug object.
+    makeHexPlug(propList, pos, Z)
+      propList is one optional list with 6 elements:
+        PSize (string): nominal diameter
+        OD    (float):  pipe OD
+        F     (float):  hex width across flats
+        C     (float):  hex height
+        L     (float):  male end length (hex to tip)
+        Conn  (string): connection type ("TH")
+      pos (vector): world position of port[0] (male thread tip); default = 0,0,0
+      Z   (vector): desired outward direction of port[0]; default = 0,0,1
+    Remember: property PRating must be defined afterwards.
+    """
+    return _makeSocketStraight(
+        pFeatures.HexPlug, "HexPlug",
+        "Quetzal_BushingPlug", propList, 6, pos, Z)
+
+
+def doHexPlug(propList=["DN25", 33.4, 35.0, 10.0, 19.0, "TH"], pypeline=None):
+    """Insert a HexPlug, aligning it to the selected port when possible.
+    propList as for makeHexPlug.
+    pypeline = string (optional PypeLine label)
+    """
+    return _doSocketStraight(makeHexPlug, "Insert hex plug", propList, pypeline)

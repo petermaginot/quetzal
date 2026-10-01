@@ -115,6 +115,7 @@ class QuetzalWorkbench(Workbench):
             "Quetzal_InsertDuctReduction",
             "Quetzal_InsertCap",
             "Quetzal_InsertCoupling",
+            "Quetzal_InsertBushing",
             "Quetzal_InsertValve",
             "Quetzal_InsertFlange",
             "Quetzal_InsertGasket",

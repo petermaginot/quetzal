@@ -140,6 +140,17 @@ def _build_socket_union(p):
                                  _g(p, "E"), _g(p, "Conn", "SW")])
 
 
+def _build_hex_bushing(p):
+    return pCmd.makeHexBushing([p["PSize"], _g(p, "PSize2", p["PSize"]), _g(p, "OD"), _g(p, "OD2"),
+                                _g(p, "F"), _g(p, "C"), _g(p, "L"), _g(p, "L2"), _g(p, "D"),
+                                _g(p, "Conn", "TH")])
+
+
+def _build_hex_plug(p):
+    return pCmd.makeHexPlug([p["PSize"], _g(p, "OD"), _g(p, "F"), _g(p, "C"), _g(p, "L"),
+                             _g(p, "Conn", "TH")])
+
+
 def _build_clamp(p):
     if p.get("ClampType", "") and "Beam" in p.get("ClampType", ""):
         raise pcf_catalog.ResolveError("beam clamps are not imported")
@@ -163,6 +174,8 @@ BUILDERS = {
     "Outlet": _build_outlet,
     "SocketCoupling": _build_socket_coupling,
     "SocketUnion": _build_socket_union,
+    "HexBushing": _build_hex_bushing,
+    "HexPlug": _build_hex_plug,
     "Clamp": _build_clamp,
 }
 
@@ -288,7 +301,7 @@ def correspondences(obj, ptype, comp):
         return [(ports[0], _vec(comp.branch_points[0])), (carrier_centre, _vec(comp.centre_point))]
     if ptype in ("Tee", "SocketTee"):
         return [(ports[0], ep[0]), (ports[1], ep[1]), (ports[2], _vec(comp.branch_points[0]))]
-    if ptype in ("Cap", "SocketCap"):
+    if ptype in ("Cap", "SocketCap", "HexPlug"):
         return [(ports[0], ep[0])]
     return [(ports[0], ep[0]), (ports[1], ep[1])]
 
@@ -313,7 +326,7 @@ def solve_rotation(obj, ptype, comp, geometry):
         header = geometry.run_axis_through(c, comp) or _up_for(axis)
         return rotation_between(ports[0] - carrier_centre, V(0, 1, 0), axis, header)
 
-    if ptype in ("Cap", "SocketCap", "Bolts_Nuts") or (len(ep) == 2 and (ep[1] - ep[0]).Length < 1e-6):
+    if ptype in ("Cap", "SocketCap", "HexPlug", "Bolts_Nuts") or (len(ep) == 2 and (ep[1] - ep[0]).Length < 1e-6):
         if ptype == "Bolts_Nuts":
             # Bolts sit mid-joint: take the axis of the gasket/flange spanning them.
             neighbour = geometry.run_axis_through(_vec(comp.co_ords), comp)
@@ -415,7 +428,7 @@ def import_pipeline(doc, pf, report):
                 props = record
                 rotation = FreeCAD.Rotation(*record["Rot"]) if "Rot" in record else None
             else:
-                if ptype == "Reduct":
+                if ptype in ("Reduct", "HexBushing"):
                     _order_reducer(comp)
                 elif ptype == "Flange":
                     _order_flange(comp, geometry)

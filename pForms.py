@@ -2268,6 +2268,8 @@ class insertCapForm(dodoDialogs.protoPypeForm):
                     size_selected.get("Conn", "SW"),
                 ]
                 self.lastCap = pCmd.doSocketCap(propList, FreeCAD.__activePypeLine__)[-1]
+                # the class (e.g. "6000lb"); SocketCap defaults to 3000lb
+                self.lastCap.PRating = self.PRating.split("_")[0]
             else:
                 # ── Butt-weld cap ────────────────────────────────────────────
                 propList = [size_selected["PSize"], float(pq(size_selected["OD"])), float(pq(size_selected["thk"]))]
@@ -4711,6 +4713,8 @@ class insertCouplingUnionForm(dodoDialogs.protoPypeForm):
                 self.lastFitting = pCmd.doSocketUnion(
                     propList, FreeCAD.__activePypeLine__)[-1]
 
+            # the class (e.g. "6000lb"); the classes default to 3000lb
+            self.lastFitting.PRating = self.PRating.split("_")[0]
             FreeCAD.activeDocument().recompute()
             FreeCADGui.Selection.clearSelection()
             FreeCADGui.Selection.addSelection(self.lastFitting)
@@ -4788,3 +4792,258 @@ class insertCouplingUnionForm(dodoDialogs.protoPypeForm):
         if not hasattr(self, "_port2DictList") or not self._port2DictList:
             return False
         return True
+
+
+class insertBushingPlugForm(dodoDialogs.protoPypeForm):
+    """
+    Dialog to insert a threaded hex-head bushing or plug (ASME B16.11).
+
+    A radio-button pair at the top of the second column selects Bushing or Plug.
+
+    Bushing mode
+    ────────────
+      CSV: Bushing_<rating>.csv  columns: PSize;PSize2;OD;OD2;F;C;L;L2;D;Conn
+      Primary sizeList  : unique PSize values  (male / large end, port 0)
+      Secondary portList: PSize2 rows for the selected PSize (female / small end)
+      Insert  → pCmd.doHexBushing (10-element propList)
+      Apply   → pushes properties onto selected HexBushing objects
+
+    Plug mode
+    ─────────
+      CSV: Plug_<rating>.csv  columns: PSize;OD;F;C;L;Conn
+      Insert  → pCmd.doHexPlug (6-element propList)
+      Apply   → pushes properties onto selected HexPlug objects
+    """
+
+    def __init__(self):
+        super(insertBushingPlugForm, self).__init__(
+            translate("insertBushingPlugForm", "Insert bushing / plug"),
+            "Bushing",
+            "B16.11",
+            "Quetzal_BushingPlug.svg",
+            x,
+            y,
+        )
+        self.sizeList.setCurrentIndex(0)
+        self.ratingList.setCurrentIndex(0)
+
+        # ── mode radio buttons ────────────────────────────────────────────────
+        self._modeGroup  = QButtonGroup()
+        self._bushingRad = QRadioButton(
+            translate("insertBushingPlugForm", "Bushing"))
+        self._plugRad    = QRadioButton(
+            translate("insertBushingPlugForm", "Plug"))
+        self._bushingRad.setChecked(True)
+        self._modeGroup.addButton(self._bushingRad)
+        self._modeGroup.addButton(self._plugRad)
+        self.secondCol.layout().addWidget(self._bushingRad)
+        self.secondCol.layout().addWidget(self._plugRad)
+        self._bushingRad.toggled.connect(self._onModeChange)
+
+        # ── secondary small-end size list (bushing only) ──────────────────────
+        self._port2DictList = []
+        self._port2Label    = QLabel(
+            translate("insertBushingPlugForm", "Small end size:"))
+        self._port2List     = QListWidget()
+        self._port2List.setMaximumHeight(100)
+        self.secondCol.layout().addWidget(self._port2Label)
+        self.secondCol.layout().addWidget(self._port2List)
+
+        # ── buttons ───────────────────────────────────────────────────────────
+        self._btnReverse = QPushButton(
+            translate("insertBushingPlugForm", "Reverse"))
+        self.secondCol.layout().addWidget(self._btnReverse)
+        self._btnReverse.clicked.connect(self.reverse)
+        self._btnApply = QPushButton(
+            translate("insertBushingPlugForm", "Apply"))
+        self.secondCol.layout().addWidget(self._btnApply)
+        self._btnApply.clicked.connect(self.apply)
+        self.btn_insert.setDefault(True)
+        self.btn_insert.setFocus()
+
+        self.sizeList.currentIndexChanged.connect(self._fillPort2)
+        self._port2List.currentRowChanged.connect(lambda _: self.changeSize(""))
+
+        self.ratingList.setCurrentIndex(0)
+        if self.ratingList.currentText():
+            self.PRating = self.ratingList.currentText()
+        self.fillSizes()
+        _, _, _, psize = pCmd.getSelectedPortDimensions()
+        if psize:
+            pCmd._selectSizeByPSize(self, psize)
+        else:
+            self.sizeList.setCurrentIndex(0)
+
+        self.show()
+        self.lastFitting = None
+
+    # ── mode helpers ──────────────────────────────────────────────────────────
+
+    def _isBushing(self):
+        return self._bushingRad.isChecked()
+
+    def _onModeChange(self):
+        """Called when the Bushing/Plug radio button changes."""
+        is_bushing = self._isBushing()
+        self.PType = "Bushing" if is_bushing else "Plug"
+        self._port2Label.setVisible(is_bushing)
+        self._port2List.setVisible(is_bushing)
+        self.sizeList.blockSignals(True)
+        try:
+            self.fillSizes()
+        finally:
+            self.sizeList.blockSignals(False)
+        _, _, _, psize = pCmd.getSelectedPortDimensions()
+        if psize and pCmd._selectSizeByPSize(self, psize):
+            pass
+        else:
+            self.sizeList.setCurrentIndex(-1)
+
+    def onRatingChanged(self, s):
+        pass  # Base changeRating handles reload and PSize preservation.
+
+    def fillSizes(self):
+        """Load the appropriate CSV and populate sizeList (and the small-end list)."""
+        self.sizeList.clear()
+        self.pipeDictList = []
+        self._uniqueSizeList = []  # Deduplicated PSize list aligned with sizeList rows
+
+        fname = self.PType + "_" + self.PRating + ".csv"
+        fpath = join(dirname(abspath(__file__)), "tablez", fname)
+        try:
+            with open(fpath, "r", encoding="utf-8-sig") as fh:
+                self.pipeDictList = list(csv.DictReader(fh, delimiter=";"))
+        except Exception:
+            return
+
+        for row in self.pipeDictList:
+            ps = row["PSize"]
+            if ps in self._uniqueSizeList:
+                continue
+            self._uniqueSizeList.append(ps)
+            if qu:
+                label = qu.format_psize(ps) + "  " + qu.format_dim(row.get("OD", ""))
+            else:
+                label = ps + "  " + row.get("OD", "")
+            self.sizeList.addItem(label)
+
+        self._fillPort2()
+
+    def _fillPort2(self):
+        """Populate _port2List with the PSize2 options for the selected PSize."""
+        # _port2List is created after super().__init__, which already calls fillSizes.
+        if not hasattr(self, "_port2List"):
+            return
+        self._port2List.clear()
+        self._port2DictList = []
+
+        if not self._isBushing() or not self.pipeDictList:
+            return
+
+        idx = self.sizeList.currentIndex()
+        if idx < 0 or idx >= len(self._uniqueSizeList):
+            return
+        big = self._uniqueSizeList[idx]
+
+        for row in self.pipeDictList:
+            if row["PSize"] != big:
+                continue
+            self._port2DictList.append(row)
+            if qu:
+                label = qu.format_psize(row["PSize2"]) + "  " + qu.format_dim(row.get("OD2", ""))
+            else:
+                label = row["PSize2"] + "  " + row.get("OD2", "")
+            self._port2List.addItem(label)
+
+        # Default to the largest reduction below the run size.
+        self._port2List.blockSignals(True)
+        self._port2List.setCurrentRow(len(self._port2DictList) - 1)
+        self._port2List.blockSignals(False)
+
+    def _selectedRow(self):
+        """CSV row for the current selection, or None."""
+        if self._isBushing():
+            idx = self._port2List.currentRow()
+            if 0 <= idx < len(self._port2DictList):
+                return self._port2DictList[idx]
+            return None
+        idx = self.sizeList.currentIndex()
+        if 0 <= idx < len(self.pipeDictList):
+            return self.pipeDictList[idx]
+        return None
+
+    # ── insert ────────────────────────────────────────────────────────────────
+
+    def insert(self):
+        if not hasattr(self, "_port2List"):
+            return
+        row = self._selectedRow()
+        if row is None:
+            FreeCAD.Console.PrintWarning("insertBushingPlugForm: no size selected\n")
+            return
+        self.sizeList.blockSignals(True)
+        try:
+            if self._isBushing():
+                propList = [row["PSize"], row["PSize2"]] + [
+                    float(pq(row[k])) for k in ("OD", "OD2", "F", "C", "L", "L2", "D")
+                ] + [row.get("Conn", "TH")]
+                self.lastFitting = pCmd.doHexBushing(
+                    propList, FreeCAD.__activePypeLine__)[-1]
+            else:
+                propList = [row["PSize"]] + [
+                    float(pq(row[k])) for k in ("OD", "F", "C", "L")
+                ] + [row.get("Conn", "TH")]
+                self.lastFitting = pCmd.doHexPlug(
+                    propList, FreeCAD.__activePypeLine__)[-1]
+            self.lastFitting.PRating = self.PRating
+
+            FreeCAD.activeDocument().recompute()
+            FreeCADGui.Selection.clearSelection()
+            FreeCADGui.Selection.addSelection(self.lastFitting)
+        finally:
+            self.sizeList.blockSignals(False)
+
+    # ── reverse ───────────────────────────────────────────────────────────────
+
+    def reverse(self):
+        """Flip selected bushings/plugs (or the last inserted one) 180 degrees around X."""
+        ptypes = ("HexBushing", "HexPlug")
+        sel = [p for p in FreeCADGui.Selection.getSelection()
+               if hasattr(p, "PType") and p.PType in ptypes]
+        if sel:
+            for p in sel:
+                pCmd.rotateTheTubeAx(p, FreeCAD.Vector(1, 0, 0), 180)
+        elif self.lastFitting:
+            pCmd.rotateTheTubeAx(self.lastFitting, FreeCAD.Vector(1, 0, 0), 180)
+
+    # ── apply ─────────────────────────────────────────────────────────────────
+
+    def apply(self):
+        """Push the current size onto all selected bushings or plugs."""
+        row = self._selectedRow()
+        if row is None:
+            return
+        ptype = "HexBushing" if self._isBushing() else "HexPlug"
+        keys = ("OD", "OD2", "F", "C", "L", "L2", "D") if self._isBushing() \
+            else ("OD", "F", "C", "L")
+        for obj in FreeCADGui.Selection.getSelection():
+            if getattr(obj, "PType", None) != ptype:
+                continue
+            obj.PSize = row["PSize"]
+            if self._isBushing():
+                obj.PSize2 = row["PSize2"]
+            for k in keys:
+                setattr(obj, k, pq(row[k]))
+            obj.Conn    = row.get("Conn", "TH")
+            obj.PRating = self.PRating
+        FreeCAD.activeDocument().recompute()
+
+    def _previewReady(self):
+        """Preview requires a grade and size; bushing mode also needs a small-end size."""
+        if not super()._previewReady():
+            return False
+        if not hasattr(self, "_port2List"):
+            return False
+        if not self._isBushing():
+            return True
+        return self._port2List.currentRow() >= 0 and bool(self._port2DictList)

@@ -992,8 +992,8 @@ class SocketEll(pypeType):
         cutout = cutout.fuse(socket1)
         cutout = cutout.fuse(socket2)
 
-        #cut out inner bore
-        base = base.cut(cutout)
+        #cut out inner bore; removeSplitter merges the body/socket seams where their radii match
+        base = base.cut(cutout).removeSplitter()
 
         fp.Shape = base   
 
@@ -1370,7 +1370,8 @@ class SocketTee(pypeType):
         cutout = cutout.fuse(cut2)
         cutout = cutout.fuse(cut3)
 
-        base = base.cut(cutout)
+        # removeSplitter merges the body/socket seams where their radii match
+        base = base.cut(cutout).removeSplitter()
         fp.Shape = base
 
         # ── ports ─────────────────────────────────────────────────────────────
@@ -3741,16 +3742,17 @@ class Outlet(pypeType):
     Parameters
     ----------
     obj       : App::FeaturePython object
-    rating    : string  schedule (ButtWeld) or class (SocketWeld)
+    rating    : string  schedule (ButtWeld) or class (SocketWeld / Threaded)
     DN        : string  nominal size  e.g. "DN50"
     OD        : float   outside diameter at the pipe-connection end
     thk       : float   wall thickness at the pipe-connection end
     A         : float   height of the fitting above the run-pipe surface
                          (measured along the fitting axis)
     B         : float   outer diameter at the base (run-pipe attachment)
-    endType   : "ButtWeld" | "SocketWeld"
+    endType   : "ButtWeld" | "SocketWeld" | "Threaded" (CSV Conn BW / SW / TH)
     angle     : 0 (straight)  |  45 (lateral/elbow)
-    E         : float   socket depth (SocketWeld only); the port sits here
+    E         : float   height of the socket / thread bottom (SocketWeld and
+                         Threaded); the port sits here
 
     Coordinate convention (local, before placement)
     ------------------------------------------------
@@ -3812,7 +3814,7 @@ class Outlet(pypeType):
             "App::PropertyLength", "E", "Outlet",
             QT_TRANSLATE_NOOP("App::Property",
                 "Socket depth  bore steps from ID to OD at this height "
-                "(SocketWeld only)"),
+                "(SocketWeld and Threaded only)"),
         ).E = E if E else 0.0
 
         obj.addProperty(
@@ -3827,7 +3829,7 @@ class Outlet(pypeType):
         obj.addProperty(
             "App::PropertyString", "EndType", "Outlet",
             QT_TRANSLATE_NOOP("App::Property",
-                "ButtWeld (tapered body) or SocketWeld (cylindrical body)"),
+                "ButtWeld (tapered body), SocketWeld or Threaded (cylindrical body)"),
         ).EndType = endType
 
         obj.addProperty(
@@ -3927,7 +3929,7 @@ class Outlet(pypeType):
                                       FreeCAD.Vector(0, 0, 1))
             body = outer.cut(inner)
 
-        else:  # SocketWeld / SW
+        else:  # SocketWeld / SW, Threaded / TH
             # Outer shell: cylinder from -(h_ext) to A
             outer = Part.makeCylinder(r_B, A + h_ext,
                                       FreeCAD.Vector(0, 0, -h_ext),
@@ -4009,14 +4011,14 @@ class Outlet(pypeType):
         # Direction faces outward (away from the body).
         if angle == 45:
             s2 = math.sqrt(2.0) / 2.0
-            if endType in ("SocketWeld", "SW"):
+            if endType in ("SocketWeld", "SW", "Threaded", "ThreadedEnd", "TH"):
                 E_clamped = min(E, A - 0.5) if E > 0 else A * 0.3
                 port_pos = FreeCAD.Vector(0, -E_clamped * s2, E_clamped * s2)
             else:
                 port_pos = FreeCAD.Vector(0, -A * s2, A * s2)
             port_dir = FreeCAD.Vector(0, -s2, s2)
         else:
-            if endType in ("SocketWeld", "SW"):
+            if endType in ("SocketWeld", "SW", "Threaded", "ThreadedEnd", "TH"):
                 E_clamped = min(E, A - 0.5) if E > 0 else A * 0.3
                 port_pos = FreeCAD.Vector(0, 0, E_clamped)
             else:
@@ -4399,3 +4401,192 @@ class SocketUnion(pypeType):
         ]
         super(SocketUnion, self).execute(fp)  # perform common operations
 
+
+def _hexPrism(across_flats, height, z0):
+    """Regular hexagonal prism on the Z axis, flats `across_flats` apart,
+    from z0 to z0 + height."""
+    import math
+    r = (across_flats / 2.0) / math.cos(math.radians(30))
+    pts = [FreeCAD.Vector(r * math.cos(math.radians(i * 60)),
+                          r * math.sin(math.radians(i * 60)), z0)
+           for i in range(6)]
+    pts.append(pts[0])
+    return Part.Face(Part.makePolygon(pts)).extrude(FreeCAD.Vector(0, 0, height))
+
+
+class HexBushing(pypeType):
+    """
+    HexBushing(obj, [PSize="DN25", PSize2="DN15", OD=33.4, OD2=21.34,
+                     F=35.0, C=6.0, L=19.0, L2=10.84, D=15.34, Conn="TH"])
+      obj     : the "App::FeaturePython" object
+      PSize   (string): nominal diameter of the male (large) end, port 0
+      PSize2  (string): nominal diameter of the female (small) end, port 1
+      OD      (float):  large pipe OD (male thread OD)
+      OD2     (float):  small pipe OD (female socket ID)
+      F       (float):  hex width across flats
+      C       (float):  hex height
+      L       (float):  male end length (hex to tip)
+      L2      (float):  female thread engagement (small size)
+      D       (float):  through-bore diameter
+      Conn    (string): connection type (TH=Threaded)
+
+    Hex-head threaded bushing (ASME B16.11) drawn without threads.  The male
+    end is the B16.11 minimum length E; port 0 at its tip goes one NPT
+    engagement into the mating socket, so a gap of L minus the engagement
+    shows between the hex and the fitting face.  The female socket is as deep
+    as the small size's NPT engagement, the mean of L1 and L2 (ASME B1.20.1).
+
+    Local coordinate system
+    ───────────────────────
+      Axis  : Z
+      Port 0: at z = 0 (tip of the male thread), outward direction -Z
+      Port 1: at z = L + C - L2 (bottom of the socket), outward direction +Z
+    """
+
+    def __init__(self, obj,
+                 PSize="DN25", PSize2="DN15",
+                 OD=33.4, OD2=21.34,
+                 F=35.0, C=6.0, L=19.0, L2=10.84, D=15.34,
+                 Conn="TH"):
+        super(HexBushing, self).__init__(obj)
+
+        obj.Proxy   = self
+        obj.PType   = "HexBushing"
+        obj.PRating = "B16.11"
+        obj.PSize   = PSize
+
+        obj.addProperty(
+            "App::PropertyString", "PSize2", "HexBushing",
+            QT_TRANSLATE_NOOP("App::Property", "Nominal diameter of port 1 (small end)"),
+        ).PSize2 = PSize2
+        obj.addProperty(
+            "App::PropertyLength", "OD", "HexBushing",
+            QT_TRANSLATE_NOOP("App::Property", "Large pipe OD (male thread)"),
+        ).OD = OD
+        obj.addProperty(
+            "App::PropertyLength", "OD2", "HexBushing",
+            QT_TRANSLATE_NOOP("App::Property", "Small pipe OD (female socket)"),
+        ).OD2 = OD2
+        obj.addProperty(
+            "App::PropertyLength", "F", "HexBushing",
+            QT_TRANSLATE_NOOP("App::Property", "Hex width across flats"),
+        ).F = F
+        obj.addProperty(
+            "App::PropertyLength", "C", "HexBushing",
+            QT_TRANSLATE_NOOP("App::Property", "Hex height"),
+        ).C = C
+        obj.addProperty(
+            "App::PropertyLength", "L", "HexBushing",
+            QT_TRANSLATE_NOOP("App::Property", "Male end length (hex to tip)"),
+        ).L = L
+        obj.addProperty(
+            "App::PropertyLength", "L2", "HexBushing",
+            QT_TRANSLATE_NOOP("App::Property", "Female thread engagement (socket depth)"),
+        ).L2 = L2
+        obj.addProperty(
+            "App::PropertyLength", "D", "HexBushing",
+            QT_TRANSLATE_NOOP("App::Property", "Through-bore diameter"),
+        ).D = D
+        obj.addProperty(
+            "App::PropertyString", "Conn", "HexBushing",
+            QT_TRANSLATE_NOOP("App::Property", "Connection type (TH=Threaded)"),
+        ).Conn = Conn
+
+        self.execute(obj)
+
+    def onChanged(self, fp, prop):
+        return None
+
+    def execute(self, fp):
+        OD  = float(fp.OD)
+        OD2 = float(fp.OD2)
+        F   = float(fp.F)
+        C   = float(fp.C)
+        L   = float(fp.L)
+        L2  = float(fp.L2)
+        D   = float(fp.D)
+        top = L + C
+
+        # male stub + hex head
+        base = Part.makeCylinder(OD / 2, L, FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 0, 1))
+        base = base.fuse(_hexPrism(F, C, L))
+
+        # female socket from the top face, then the bore down to the male tip
+        socket = Part.makeCylinder(OD2 / 2, L2, FreeCAD.Vector(0, 0, top), FreeCAD.Vector(0, 0, -1))
+        bore = Part.makeCylinder(D / 2, top, FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 0, 1))
+        base = base.cut(socket).cut(bore).removeSplitter()
+
+        fp.Shape = base
+        fp.Ports = [
+            FreeCAD.Vector(0, 0, 0),         # port 0: male thread tip
+            FreeCAD.Vector(0, 0, top - L2),  # port 1: bottom of socket
+        ]
+        fp.PortDirections = [
+            FreeCAD.Vector(0, 0, -1),
+            FreeCAD.Vector(0, 0,  1),
+        ]
+        super(HexBushing, self).execute(fp)  # perform common operations
+
+
+class HexPlug(pypeType):
+    """
+    HexPlug(obj, [PSize="DN25", OD=33.4, F=35.0, C=10.0, L=19.0, Conn="TH"])
+      obj   : the "App::FeaturePython" object
+      PSize (string): nominal diameter
+      OD    (float):  pipe OD (male thread OD)
+      F     (float):  hex width across flats
+      C     (float):  hex height
+      L     (float):  male end length (hex to tip)
+      Conn  (string): connection type (TH=Threaded)
+
+    Hex-head threaded plug (ASME B16.11): a HexBushing without the hole.
+
+    Local coordinate system
+    ───────────────────────
+      Axis  : Z
+      Port 0: at z = 0 (tip of the male thread), outward direction -Z
+    """
+
+    def __init__(self, obj, PSize="DN25", OD=33.4, F=35.0, C=10.0, L=19.0, Conn="TH"):
+        super(HexPlug, self).__init__(obj)
+
+        obj.Proxy   = self
+        obj.PType   = "HexPlug"
+        obj.PRating = "B16.11"
+        obj.PSize   = PSize
+
+        obj.addProperty(
+            "App::PropertyLength", "OD", "HexPlug",
+            QT_TRANSLATE_NOOP("App::Property", "Pipe OD (male thread)"),
+        ).OD = OD
+        obj.addProperty(
+            "App::PropertyLength", "F", "HexPlug",
+            QT_TRANSLATE_NOOP("App::Property", "Hex width across flats"),
+        ).F = F
+        obj.addProperty(
+            "App::PropertyLength", "C", "HexPlug",
+            QT_TRANSLATE_NOOP("App::Property", "Hex height"),
+        ).C = C
+        obj.addProperty(
+            "App::PropertyLength", "L", "HexPlug",
+            QT_TRANSLATE_NOOP("App::Property", "Male end length (hex to tip)"),
+        ).L = L
+        obj.addProperty(
+            "App::PropertyString", "Conn", "HexPlug",
+            QT_TRANSLATE_NOOP("App::Property", "Connection type (TH=Threaded)"),
+        ).Conn = Conn
+
+        self.execute(obj)
+
+    def onChanged(self, fp, prop):
+        return None
+
+    def execute(self, fp):
+        OD = float(fp.OD)
+        L  = float(fp.L)
+        base = Part.makeCylinder(OD / 2, L, FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 0, 1))
+        base = base.fuse(_hexPrism(float(fp.F), float(fp.C), L)).removeSplitter()
+        fp.Shape = base
+        fp.Ports = [FreeCAD.Vector(0, 0, 0)]
+        fp.PortDirections = [FreeCAD.Vector(0, 0, -1)]
+        super(HexPlug, self).execute(fp)  # perform common operations

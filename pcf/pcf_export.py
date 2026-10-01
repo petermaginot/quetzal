@@ -188,10 +188,10 @@ def component_for(obj, units_bore):
         comp.end_points = [_pt(ports[0], bore), _pt(ports[1], bore)]
         comp.centre_point = _pt(_project_on_line(ports[2], ports[0], ports[1]))
         comp.branch_points = [_pt(ports[2], bore2)]
-    elif ptype in ("Reduct", "SocketCoupling"):
+    elif ptype in ("Reduct", "SocketCoupling", "HexBushing"):
         bore2 = pcf_map.bore_for(getattr(obj, "PSize2", "") or obj.PSize, units_bore)
         comp.end_points = [_pt(ports[0], bore), _pt(ports[1], bore2)]
-    elif ptype in ("Cap", "SocketCap"):
+    elif ptype in ("Cap", "SocketCap", "HexPlug"):
         comp.end_points = [_pt(ports[0], bore)]
     elif ptype == "Outlet":
         carrier_r = float(getattr(obj, "CarrierOD", 0)) / 2.0
@@ -225,14 +225,21 @@ def _item_code(obj, keyword):
         other = getattr(obj, name, "")
         if other and other != obj.PSize:
             parts.append(other)
+    conn = str(getattr(obj, "Conn", "") or "")
     for name in ("FlangeType", "FClass", "PRating", "Conn"):
         value = str(getattr(obj, name, "") or "")
+        # socket/threaded grades are stored as "3000lb_SW" / "3000lb_TH"; Conn follows
+        if name == "PRating" and conn and value.endswith("_" + conn):
+            value = value[:-len(conn) - 1]
         if value and value != "No rating" and value not in parts:
             parts.append(value)
     # Sizes in the description follow the user's DN/NPS preference.
     sizes = {obj.PSize, getattr(obj, "PSize2", ""), getattr(obj, "PSizeBranch", "")} - {""}
     words = [quetzal_units.format_psize(p) if p in sizes else p for p in parts[1:]]
     lead = [keyword]
+    if obj.PType in ("HexBushing", "HexPlug"):
+        # exported as a reducer / cap, but the BOM should say what it is
+        lead = ["HEX", "BUSHING" if obj.PType == "HexBushing" else "PLUG"]
     # Elbows differ by angle and radius, which PRating (a schedule) does not
     # show: a 90 LR, a 45 LR and a 6D bend must not share an item code.
     if obj.PType in ("Elbow", "SocketEll") and hasattr(obj, "BendAngle"):
