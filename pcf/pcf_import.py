@@ -105,7 +105,8 @@ def _build_valve(p):
             flgPropList=flg, actuator=p.get("Actuator", "Handle") or "Handle")
     if conn in ("SW", "TH"):
         return pCmd.makeValve([p["PSize"], p["PRating"], _g(p, "OD"), _g(p, "ODBody"),
-                               _g(p, "Height"), _g(p, "E"), conn, _g(p, "Kv")],
+                               _g(p, "Height"), _g(p, "E"), conn, _g(p, "Kv"),
+                               _g(p, "E2", _g(p, "E")), p.get("Conn2") or conn],
                               actuator=p.get("Actuator", "Handle") or "Handle")
     return pCmd.makeValve([p["PSize"], p["PRating"], _g(p, "ODBody"), _g(p, "ID"),
                            _g(p, "Height"), _g(p, "Kv")])

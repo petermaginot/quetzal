@@ -2325,6 +2325,10 @@ def makeValve(propList=[], pos=None, Z=None, flgPropList=None, actuator="Handle"
       E       (float) : socket / thread engagement depth
       Conn    (string): "SW" or "TH"
       Kv      (float) : flow factor  [optional]
+      E2      (float) : engagement depth at port 1 (-Z)  [optional, = E]
+      Conn2   (string): "SW" or "TH" at port 1  [optional, = Conn]
+      Gate and globe valves (VType Gate_* / Globe_*) are drawn with a
+      horizontal handwheel.
 
     propList elements for the flanged path:
       DN      (string): nominal diameter
@@ -2345,8 +2349,9 @@ def makeValve(propList=[], pos=None, Z=None, flgPropList=None, actuator="Handle"
 
     actuator -- "Handle" (default), "Handle-closed", or "Gearbox".  Applies to
       flanged and SW/TH valves; "Gearbox" is drawn for flanged valves only.
-      Flanged gate valves take "Handwheel", "Handwheel-closed", "Gearbox" or
-      "Gearbox-closed" ("Handle" is drawn as a handwheel).
+      Flanged gate and globe valves take "Handwheel", "Handwheel-closed",
+      "Gearbox" or "Gearbox-closed" ("Handle" is drawn as a handwheel);
+      flanged globe valves also "Pneumatic" or "Pneumatic-closed".
 
     pos (Vector): insertion point; default = origin
     Z   (Vector): flow-axis direction; default = (0,0,1)
@@ -2388,11 +2393,14 @@ def makeValve(propList=[], pos=None, Z=None, flgPropList=None, actuator="Handle"
         # (after DN, VType, OD, ODBody, H, E).
         if len(propList) >= 7 and isinstance(propList[6], str) and \
                 propList[6] in ("SW", "TH"):
-            # [DN, VType, OD, ODBody, H, E, Conn, (Kv)]
+            # [DN, VType, OD, ODBody, H, E, Conn, (Kv, E2, Conn2)]
             DN, VType, OD, ODBody, H, E, Conn = propList[:7]
             Kv = float(propList[7]) if len(propList) >= 8 else 0.0
+            E2 = float(propList[8]) if len(propList) >= 9 and propList[8] else E
+            Conn2 = propList[9] if len(propList) >= 10 and propList[9] else Conn
             pFeatures.Valve(a, DN=DN, VType=VType, ODBody=ODBody, H=H, Kv=Kv,
-                            OD=OD, E=E, Conn=Conn, actuator=actuator)
+                            OD=OD, E=E, Conn=Conn, actuator=actuator,
+                            E2=E2, Conn2=Conn2)
         else:
             # Legacy path: [DN, VType, ODBody, ID, H, (Kv)]
             pFeatures.Valve(a, *propList)
@@ -2414,7 +2422,7 @@ def makeValve(propList=[], pos=None, Z=None, flgPropList=None, actuator="Handle"
 
 
 def doValves(propList=["DN50", "ball", 72, 50, 40, 150], pypeline=None, pos=0,
-             flgPropList=None, actuator="Handle"):
+             flgPropList=None, actuator="Handle", port=0):
     """Insert one or more Valve objects.
 
     propList  -- see makeValve() for the accepted formats.
@@ -2426,8 +2434,14 @@ def doValves(propList=["DN50", "ball", 72, 50, 40, 150], pypeline=None, pos=0,
                    When supplied the flanged construction path is used.
                    Elements: [PSize, FlangeType, D, t, f, n, df, drf, trf]
     actuator    -- "Handle" (default), "Handle-closed", or "Gearbox" (flanged only).
-                   Flanged gate valves: "Handwheel", "Handwheel-closed",
-                   "Gearbox" or "Gearbox-closed".
+                   Flanged gate and globe valves: "Handwheel",
+                   "Handwheel-closed", "Gearbox" or "Gearbox-closed";
+                   flanged globe valves also "Pneumatic" or
+                   "Pneumatic-closed".
+    port        -- valve port mated to the selected port: 0 (default) or 1.
+                   On swing check and globe valves port 0 is the inlet
+                   ("connect to back") and port 1 the outlet ("connect to
+                   front").
     """
     color  = 0.05, 0.3, 0.75
     vlist  = []
@@ -2466,7 +2480,7 @@ def doValves(propList=["DN50", "ball", 72, 50, 40, 150], pypeline=None, pos=0,
                 valve.ViewObject.ShapeColor = color
                 FreeCAD.activeDocument().commitTransaction()
                 FreeCAD.activeDocument().recompute()
-                alignTwoPorts(valve, 0, srcObj, srcPort)
+                alignTwoPorts(valve, port, srcObj, srcPort)
             else:
                 valve = makeValve(propList, pos_vec, Z_vec, flgPropList=flgPropList, actuator=actuator)
                 vlist.append(valve)

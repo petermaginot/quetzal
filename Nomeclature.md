@@ -98,6 +98,8 @@ Variables Implemented in each CSV table:
 | E | Socket depth bore steps from ID to OD at this height | Outlet, SocketCap |
 | Conn | ConnectionType | SocketCap, Cap, Bushing, Plug |
 | Conc | Concentric or excentric connection | Reduct |
+| E2 | Socket / thread engagement at port 1 when it differs from E | Valve (socket x threaded) |
+| Conn2 | Connection type at port 1 when it differs from Conn | Valve (socket x threaded) |
 | TopH | Upper envelope from centerline; gate valves: to the stem top, gate open | Valve (flanged) |
 | WheelD | Handwheel diameter (0 = 0.9 x face-to-face length) | Valve (flanged gate) |
 

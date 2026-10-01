@@ -406,14 +406,22 @@ def _valve(comp, ctx):
     family = pcf_map.valve_family_from_skey(comp.skey) or "Ball"
 
     if end in ("SW", "SC"):
-        row = find_row("Valve_Ball-Threaded.csv", PSize=dn)
+        # A PCF SKEY carries one end type, so a socket x threaded gate or
+        # globe valve comes back as socket x socket.
+        if family in ("Gate", "Globe", "Check_Swing"):
+            table = "Valve_%s-%s.csv" % (family.split("_")[0],
+                                          "Socket" if end == "SW" else "Threaded")
+        else:
+            table = "Valve_Ball-Threaded.csv"
+        row = find_row(table, PSize=dn)
         if row:
             # Ports sit E inside each end of the body.
             engagement = num(row["E"])
             return {"PSize": dn, "PRating": row.get("Vtype", "Ball_Threaded"),
                     "OD": num(row["OD"]), "ODBody": num(row["ODBody"]),
                     "Height": length + 2.0 * engagement, "E": engagement,
-                    "Conn": pcf_map.conn_from_skey(comp.skey)}
+                    "Conn": pcf_map.conn_from_skey(comp.skey),
+                    "Actuator": "Handwheel" if family in ("Gate", "Globe") else "Handle"}
 
     hint = _flange_class(comp, ctx)
     best = None
@@ -429,7 +437,7 @@ def _valve(comp, ctx):
         props = {"PSize": dn, "PRating": row.get("VType", family), "Height": length,
                  "Kv": num(row.get("Kv")), "Conn": cls, "BottomH": num(row.get("BottomH")),
                  "TopH": num(row.get("TopH")), "WheelD": num(row.get("WheelD")),
-                 "Actuator": "Handwheel" if family == "Gate" else "Handle"}
+                 "Actuator": "Handwheel" if family in ("Gate", "Globe") else "Handle"}
         props.update(_blind_flange_props(cls, dn))
         return props
 

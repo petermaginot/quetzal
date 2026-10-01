@@ -1,9 +1,9 @@
 # Notes for agents working on Quetzal
 
 Lessons from adding the threaded fittings (hex bushings and plugs, threaded
-ells, tees, couplings, caps, unions and olets) and testing them in a live
-FreeCAD session over MCP. Read this before adding a component type or a
-fitting table.
+ells, tees, couplings, caps, unions and olets) and the gate, globe and check
+valves, and testing them in a live FreeCAD session over MCP. Read this
+before adding a component type, a valve or a fitting table.
 
 ## Adding a component type
 
@@ -46,6 +46,45 @@ classes with `Conn = "TH"`.
 - Thread engagement is (L1 + L2)/2 from ASME B1.20.1. The threaded tables use
   it as their socket depth.
 
+## Valves
+
+`Valve` is one PType with several builders. `execute()` picks one from
+`Conn` and the start of `PRating` (the table's `VType`):
+
+| Conn | PRating | Builder |
+|---|---|---|
+| pressure class (`150lb`...) | `Check_Swing...` | `_execute_swing_check_valve` |
+| | `Gate...` / `Globe...` | `_execute_rising_flanged` |
+| | anything else | `_execute_flanged` (trunnion ball) |
+| `SW` / `TH` | `Gate...` / `Globe...` | `_execute_rising_sw_th` |
+| | `Check...` | `_execute_check_sw_th` |
+| | anything else | `_execute_sw_th` (ball) |
+| none | | `_execute_legacy` (two-cone, knife gate, pinch) |
+
+- Shared pieces: `_blFlange` (blind-flange end), `_gearboxWheel`, and
+  `_risingStemValve`, which builds the bonnet, yoke, stem and actuator for
+  gate and globe; `_gateInternals` / `_globeInternals` supply the body,
+  cavity and trim.
+- **Flow direction**: the inlet ("back") is port 0 at +Z and the outlet
+  ("front") is port 1 at -Z. `doValves(port=...)` mates that port to the
+  selected one (the form's *Connect to back / front*). PCF writes port 0 as
+  END-POINT 1, and the iso check symbol fills the triangle at END-POINT 2.
+- **SW / TH valves**: a table row gives port 0 (`E`, `Conn`); optional
+  `E2` / `Conn2` give port 1 for socket x threaded. A mixed valve keeps
+  `Conn = "SW"` so every SW/TH check still works. Grades are
+  `Valve_<Family>-Threaded`, `-Socket` and `-SocketxThreaded`. A PCF SKEY
+  holds one end type, so a socket x threaded valve imported without the
+  Quetzal record comes back socket x socket.
+- `Actuator` strings: `Handle`, `Handle-closed`, `Gearbox` (ball);
+  `Handwheel`, `Gearbox` and, on flanged globes, `Pneumatic`, each with a
+  `-closed` form (gate, globe). Values a valve doesn't offer draw as its
+  default. `insertValveForm` shows the options for the loaded table
+  (`_isRisingStemTable`, `_isDirectionalTable`, `_isCheckTable`).
+- `pcf_catalog._valve` maps the SKEY family to a table; add new valve
+  tables there too.
+- Before refactoring shared valve geometry, record volume and bounding box
+  of a few rows per builder and compare afterwards.
+
 ## Getting dimension data
 
 - WebFetch often refuses to reproduce dimension tables, or summarizes them
@@ -54,6 +93,10 @@ classes with `Conn = "TH"`.
   the HTML as `latin-1`.
 - **Read what each letter means before using it.** When a page doesn't label its letters, say what you inferred.
 - Check derived values against a second source, or flag them as unchecked.
+- Read the page's footnotes, not just the table. On the B16.10 face-to-face
+  pages the globe / lift check column holds rows marked "swing check only".
+- When matching a photo, find the flow arrow before deciding which end a
+  feature belongs on.
 
 ## Geometry checks that caught real problems
 
@@ -71,6 +114,34 @@ classes with `Conn = "TH"`.
   This catches thin walls and inverted lengths that a single test part won't.
 - Where a body and its socket band have the same radius, fusing leaves seam
   rings. `cut(...).removeSplitter()` merges them without changing the volume.
+- Look inside: cut the shape in half with a box, show it as a
+  `Part::Feature` and screenshot it. Probe internals with small solids,
+  e.g. a cylinder in the bore must hit a closed disc and miss an open one,
+  and a thin ring just inside each socket bottom must be fully solid.
+- `BoundBox` is loose around tori and splines; measure with
+  `optimalBoundingBox()`.
+
+## OCC boolean pitfalls
+
+Each of these made a valve shape invalid, split it into several solids or
+returned a null shape on some table rows only:
+
+- **Tangent or coplanar faces**: a circle tangent to a plane, a flat side at
+  exactly a tube's radius, a cylinder ending on another's face, two coaxial
+  surfaces of the same radius. Overlap by a margin (0.3 to 0.5 wall) or
+  change a radius by a few percent instead.
+- **Thin overlaps** (0.01 mm) leave two solids after a fuse.
+- **A cylinder coaxial with a torus** may not merge with it; move it off the
+  axis by a few percent of its radius.
+- **Lofts**: fusing a `makeLoft` solid made later booleans invalid. Shapes
+  that checked valid right after their fuse were invalid afterwards (later
+  booleans change shared tolerances). Use exact primitives (cones, tori,
+  revolved faces).
+- `removeSplitter()` can return an invalid solid; keep the unsplit shape
+  when it is valid and the merged one is not.
+- To find the failing step, run an AST-instrumented copy of the builder that
+  logs `isValid()` and solid count after every `fuse` / `cut`, and keep the
+  shapes to re-check after the function returns.
 
 ## Working in the live FreeCAD session over MCP
 
@@ -98,8 +169,16 @@ for the session preamble and verification recipe.
   it, change only its properties, inside one transaction, and say what you
   changed. Report anything odd (such as a part sitting 1" off its port)
   rather than "fixing" it.
-- `execute_python` keeps its namespace between calls. Redefine helpers
-  rather than relying on stale ones, and keep each call under about 50 s.
+- `execute_python` keeps its namespace between calls, but loses it when
+  FreeCAD restarts. Redefine helpers rather than relying on stale ones, and
+  keep each call under about 50 s.
+- Building every row of a valve table takes minutes (about 1 to 2 s per
+  valve). Use `execute_python_async`; past 120 s it returns a job id for
+  `poll_job`. Foreground `sleep` is blocked, so wait with a background Bash
+  timer.
+- FreeCAD can crash under long sessions. `spawn_freecad_instance` fails on
+  Windows (its socket path must be under `/tmp`), so ask the user to restart
+  FreeCAD, then check the open documents again.
 - `FreeCADGui.insert` / `export` fail inside the MCP context. Call
   `pcf_export.export(...)` and `pcf_import.insert(path, docname)` directly.
 - Maker signatures differ. `pCmd.makePipe(rating, propList)` takes the rating
@@ -132,3 +211,6 @@ for the session preamble and verification recipe.
   with Python instead.
 - Large heredocs containing quotes can break the Bash tool. Write the
   content to a scratch file and append or run it from there.
+- A Bash heredoc turned `\\` into `\`, which joined two lines of
+  `pFeatures.py` silently. Write scripts containing backslashes with the
+  Write tool.

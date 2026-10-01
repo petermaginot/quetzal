@@ -2851,9 +2851,11 @@ class insertValveForm(dodoDialogs.protoPypeForm):
 
     Socket-weld / Threaded  (CSV has Conn == "SW" or "TH")
     -------------------------------------------------------
-      CSV columns : Psize ; OD ; Vtype ; ODBody ; H ; E ; Conn  [; Kv]
+      CSV columns : Psize ; OD ; Vtype ; ODBody ; H ; E ; Conn  [; Kv ; E2 ; Conn2]
       sizeList    : PSize   OD
-      propList    : [DN, VType, OD, ODBody, H, E, Conn, Kv]
+      propList    : [DN, VType, OD, ODBody, H, E, Conn, Kv, E2, Conn2]
+      E2 / Conn2 describe port 1 on socket x threaded valves (default E / Conn).
+      Gate and globe tables offer Handwheel / Handwheel (closed) only.
       "Insert in pipe" checkbox + slider are hidden.
 
     Flanged  (CSV has Conn == pressure class)
@@ -2862,8 +2864,9 @@ class insertValveForm(dodoDialogs.protoPypeForm):
       sizeList    : PSize   H
       propList    : [DN, VType, H, Kv, Conn, BottomH, TopH, WheelD]
       Flange bolt pattern comes from Flange_ASME-BL-RF-<Conn>.csv.
-      Gate tables (VType Gate_*) offer Handwheel / Gearbox actuators, each
-      open or closed, in place of Handle / Handle (closed) / Gearbox.
+      Gate and globe tables (VType Gate_* / Globe_*) offer Handwheel /
+      Gearbox actuators, each open or closed, in place of Handle /
+      Handle (closed) / Gearbox; globe tables add Pneumatic (open / closed).
 
     A rotation dial lets the last-inserted valve be spun around its
     flow axis (Z) in 15-degree increments, identical to insertElbowForm.
@@ -2936,19 +2939,38 @@ class insertValveForm(dodoDialogs.protoPypeForm):
         self.secondCol.layout().addWidget(self.cb1)
 
         # Actuator selection radio buttons (flanged and SW/TH valves)
+        # Grid: one column per actuator, open on the top row, closed below.
         self.actuatorGroup = QWidget()
-        self.actuatorGroup.setLayout(QHBoxLayout())
+        self.actuatorGroup.setLayout(QGridLayout())
         self.actuatorGroup.layout().setContentsMargins(0, 0, 0, 0)
         self.rbHandle       = QRadioButton(translate("insertValveForm", "Handle"))
         self.rbHandleClosed = QRadioButton(translate("insertValveForm", "Handle (closed)"))
         self.rbGearbox      = QRadioButton(translate("insertValveForm", "Gearbox"))
         self.rbGearboxClosed = QRadioButton(translate("insertValveForm", "Gearbox (closed)"))
+        self.rbPneumatic    = QRadioButton(translate("insertValveForm", "Pneumatic"))
+        self.rbPneumaticClosed = QRadioButton(
+            translate("insertValveForm", "Pneumatic (closed)"))
         self.rbHandle.setChecked(True)
-        self.actuatorGroup.layout().addWidget(self.rbHandle)
-        self.actuatorGroup.layout().addWidget(self.rbHandleClosed)
-        self.actuatorGroup.layout().addWidget(self.rbGearbox)
-        self.actuatorGroup.layout().addWidget(self.rbGearboxClosed)
+        grid = self.actuatorGroup.layout()
+        grid.addWidget(self.rbHandle, 0, 0)
+        grid.addWidget(self.rbHandleClosed, 1, 0)
+        grid.addWidget(self.rbGearbox, 0, 1)
+        grid.addWidget(self.rbGearboxClosed, 1, 1)
+        grid.addWidget(self.rbPneumatic, 0, 2)
+        grid.addWidget(self.rbPneumaticClosed, 1, 2)
         self.secondCol.layout().addWidget(self.actuatorGroup)
+
+        # Which end of a directional valve (swing check, globe) goes on the
+        # selected port: the back is the inlet (port 0), the front the outlet.
+        self.directionGroup = QWidget()
+        self.directionGroup.setLayout(QHBoxLayout())
+        self.directionGroup.layout().setContentsMargins(0, 0, 0, 0)
+        self.rbConnectBack  = QRadioButton(translate("insertValveForm", "Connect to back"))
+        self.rbConnectFront = QRadioButton(translate("insertValveForm", "Connect to front"))
+        self.rbConnectBack.setChecked(True)
+        self.directionGroup.layout().addWidget(self.rbConnectBack)
+        self.directionGroup.layout().addWidget(self.rbConnectFront)
+        self.secondCol.layout().addWidget(self.directionGroup)
 
         # Now that sli, cb1, and actuator controls exist, apply the correct visibility
         self._refreshLayout()
@@ -2974,14 +2996,38 @@ class insertValveForm(dodoDialogs.protoPypeForm):
                 return True
         return False
 
-    def _isGateTable(self):
-        """Return True when the loaded CSV is a flanged gate valve table."""
-        if not self._isFlangedConn():
-            return False
+    def _isRisingStemTable(self, kinds=("gate", "globe")):
+        """Return True when the loaded CSV is a gate or globe valve table
+        (or one of the given kinds)."""
         for row in self.pipeDictList:
-            if self._normRow(row).get("vtype", "").lower().startswith("gate"):
+            if self._normRow(row).get("vtype", "").lower().startswith(kinds):
                 return True
         return False
+
+    def _isDirectionalTable(self):
+        """Return True for valves modelled with a flow direction: flanged
+        swing checks, SW / TH checks and flanged / SW / TH globe valves (not
+        the generic two-cone globe or wafer check)."""
+        for row in self.pipeDictList:
+            r = self._normRow(row)
+            vtype = r.get("vtype", "").lower()
+            if "check_swing" in vtype or \
+                    (vtype.startswith(("globe", "check")) and r.get("conn")):
+                return True
+        return False
+
+    def _isCheckTable(self):
+        """Return True for check valve tables (no actuator)."""
+        return any(self._normRow(row).get("vtype", "").lower().startswith("check")
+                   for row in self.pipeDictList)
+
+    def _attachPort(self):
+        """Valve port that goes on the selected port: 0 = back (inlet),
+        1 = front (outlet).  Non-directional valves always use port 0."""
+        if self._isDirectionalTable() and hasattr(self, "rbConnectFront") \
+                and self.rbConnectFront.isChecked():
+            return 1
+        return 0
 
     def _loadFlangePropList(self, conn, psize):
         """Load the matching blind-flange CSV and return the property row for psize.
@@ -3035,10 +3081,13 @@ class insertValveForm(dodoDialogs.protoPypeForm):
         """Show/hide controls depending on valve connection type.
 
         - "Insert in pipe" slider/checkbox: shown for legacy BW valves only.
+        - Connect to back / front: shown for check and globe valves.
+        - Actuator radio buttons are hidden for check valves.
         - Actuator radio buttons: shown for flanged and SW/TH valves; the
-          Gearbox option is shown for flanged valves only.  Gate tables
-          relabel them Handwheel / Handwheel (closed) / Gearbox and add
-          Gearbox (closed).
+          Gearbox option is shown for flanged valves only.  Gate and globe
+          tables relabel them Handwheel / Handwheel (closed) and, when
+          flanged, add Gearbox (closed); flanged globe tables add Pneumatic
+          and Pneumatic (closed).
 
         Called from fillSizes() which runs during __init__ (via super().__init__),
         so controls may not exist yet -- guard with hasattr throughout.
@@ -3050,10 +3099,20 @@ class insertValveForm(dodoDialogs.protoPypeForm):
         if hasattr(self, "cb1"):
             self.cb1.setVisible(not is_socket_or_flanged)
         if hasattr(self, "actuatorGroup"):
-            self.actuatorGroup.setVisible(is_socket_or_flanged)
-            is_gate = self._isGateTable()
-            self.rbGearbox.setVisible(is_flanged)
-            self.rbGearboxClosed.setVisible(is_gate)
+            self.actuatorGroup.setVisible(is_socket_or_flanged and
+                                          not self._isCheckTable())
+            is_gate = self._isRisingStemTable()
+            is_globe = self._isRisingStemTable(("globe",))
+            shown = {
+                self.rbGearbox: is_flanged,
+                self.rbGearboxClosed: is_gate and is_flanged,
+                self.rbPneumatic: is_globe and is_flanged,
+                self.rbPneumaticClosed: is_globe and is_flanged,
+            }
+            for btn, visible in shown.items():
+                btn.setVisible(visible)
+                if not visible and btn.isChecked():
+                    self.rbHandle.setChecked(True)
             if is_gate:
                 self.rbHandle.setText(translate("insertValveForm", "Handwheel"))
                 self.rbHandleClosed.setText(
@@ -3062,14 +3121,17 @@ class insertValveForm(dodoDialogs.protoPypeForm):
                 self.rbHandle.setText(translate("insertValveForm", "Handle"))
                 self.rbHandleClosed.setText(
                     translate("insertValveForm", "Handle (closed)"))
-            if (not is_flanged and self.rbGearbox.isChecked()) or \
-                    (not is_gate and self.rbGearboxClosed.isChecked()):
-                self.rbHandle.setChecked(True)
+        if hasattr(self, "directionGroup"):
+            self.directionGroup.setVisible(self._isDirectionalTable())
 
     def _actuator(self):
         """Actuator string from the radio buttons (default "Handle", or
-        "Handwheel" for gate valves)."""
-        gate = self._isGateTable()
+        "Handwheel" for gate and globe valves)."""
+        gate = self._isRisingStemTable()
+        if hasattr(self, "rbPneumaticClosed") and self.rbPneumaticClosed.isChecked():
+            return "Pneumatic-closed"
+        if hasattr(self, "rbPneumatic") and self.rbPneumatic.isChecked():
+            return "Pneumatic"
         if hasattr(self, "rbGearboxClosed") and self.rbGearboxClosed.isChecked():
             return "Gearbox-closed"
         if hasattr(self, "rbGearbox") and self.rbGearbox.isChecked():
@@ -3213,9 +3275,11 @@ class insertValveForm(dodoDialogs.protoPypeForm):
                 flgPropList = self._loadFlangePropList(conn, psize)
                 self.lastValve = pCmd.doValves(
                     propList, FreeCAD.__activePypeLine__,
-                    flgPropList=flgPropList, actuator=self._actuator())[-1]
+                    flgPropList=flgPropList, actuator=self._actuator(),
+                    port=self._attachPort())[-1]
             elif self._isSocketConn():
-                # [DN, VType, OD, ODBody, H, E, Conn, Kv]
+                # [DN, VType, OD, ODBody, H, E, Conn, Kv, E2, Conn2]
+                # E2 / Conn2 (port 1) only differ on socket x threaded valves.
                 propList = [
                     r["psize"],
                     r.get("vtype", self.PRating),
@@ -3225,10 +3289,12 @@ class insertValveForm(dodoDialogs.protoPypeForm):
                     float(pq(r["e"])),
                     r["conn"],
                     float(pq(r.get("kv", "0"))),
+                    float(pq(r.get("e2") or r["e"])),
+                    r.get("conn2") or r["conn"],
                 ]
                 self.lastValve = pCmd.doValves(
                     propList, FreeCAD.__activePypeLine__,
-                    actuator=self._actuator())[-1]
+                    actuator=self._actuator(), port=self._attachPort())[-1]
             else:
                 # [DN, VType, ODBody, ID, H, Kv]
                 propList = [
@@ -3301,6 +3367,9 @@ class insertValveForm(dodoDialogs.protoPypeForm):
                 obj.E       = pq(r["e"])
                 obj.Conn    = r["conn"]
                 obj.Kv      = float(pq(r.get("kv", "0")))
+                if hasattr(obj, "E2"):
+                    obj.E2    = pq(r.get("e2") or r["e"])
+                    obj.Conn2 = r.get("conn2") or r["conn"]
                 FreeCAD.activeDocument().recompute()
 
             elif not self._isSocketConn() and hasattr(obj, "ID"):
