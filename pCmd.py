@@ -2335,7 +2335,8 @@ def makeValve(propList=[], pos=None, Z=None, flgPropList=None, actuator="Handle"
       (Same column order as the CSV, matching the Flange __init__ signature.)
       When provided the flanged construction path is used automatically.
 
-    actuator -- "Handle" (default) or "Gearbox".  Applies to flanged valves only.
+    actuator -- "Handle" (default), "Handle-closed", or "Gearbox".  Applies to
+      flanged and SW/TH valves; "Gearbox" is drawn for flanged valves only.
 
     pos (Vector): insertion point; default = origin
     Z   (Vector): flow-axis direction; default = (0,0,1)
@@ -2379,7 +2380,7 @@ def makeValve(propList=[], pos=None, Z=None, flgPropList=None, actuator="Handle"
             DN, VType, OD, ODBody, H, E, Conn = propList[:7]
             Kv = float(propList[7]) if len(propList) >= 8 else 0.0
             pFeatures.Valve(a, DN=DN, VType=VType, ODBody=ODBody, H=H, Kv=Kv,
-                            OD=OD, E=E, Conn=Conn)
+                            OD=OD, E=E, Conn=Conn, actuator=actuator)
         else:
             # Legacy path: [DN, VType, ODBody, ID, H, (Kv)]
             pFeatures.Valve(a, *propList)
@@ -2412,7 +2413,7 @@ def doValves(propList=["DN50", "ball", 72, 50, 40, 150], pypeline=None, pos=0,
     flgPropList -- optional list of blind-flange properties for flanged valves.
                    When supplied the flanged construction path is used.
                    Elements: [PSize, FlangeType, D, t, f, n, df, drf, trf]
-    actuator    -- "Handle" (default) or "Gearbox".  Flanged valves only.
+    actuator    -- "Handle" (default), "Handle-closed", or "Gearbox" (flanged only).
     """
     color  = 0.05, 0.3, 0.75
     vlist  = []

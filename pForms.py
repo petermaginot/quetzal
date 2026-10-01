@@ -2931,14 +2931,16 @@ class insertValveForm(dodoDialogs.protoPypeForm):
         self.cb1 = QCheckBox(translate("insertValveForm", " Insert in pipe"))
         self.secondCol.layout().addWidget(self.cb1)
 
-        # Actuator selection radio buttons (flanged valves only)
+        # Actuator selection radio buttons (flanged and SW/TH valves)
         self.actuatorGroup = QWidget()
         self.actuatorGroup.setLayout(QHBoxLayout())
         self.actuatorGroup.layout().setContentsMargins(0, 0, 0, 0)
-        self.rbHandle   = QRadioButton(translate("insertValveForm", "Handle"))
-        self.rbGearbox  = QRadioButton(translate("insertValveForm", "Gearbox"))
+        self.rbHandle       = QRadioButton(translate("insertValveForm", "Handle"))
+        self.rbHandleClosed = QRadioButton(translate("insertValveForm", "Handle (closed)"))
+        self.rbGearbox      = QRadioButton(translate("insertValveForm", "Gearbox"))
         self.rbHandle.setChecked(True)
         self.actuatorGroup.layout().addWidget(self.rbHandle)
+        self.actuatorGroup.layout().addWidget(self.rbHandleClosed)
         self.actuatorGroup.layout().addWidget(self.rbGearbox)
         self.secondCol.layout().addWidget(self.actuatorGroup)
 
@@ -3018,7 +3020,8 @@ class insertValveForm(dodoDialogs.protoPypeForm):
         """Show/hide controls depending on valve connection type.
 
         - "Insert in pipe" slider/checkbox: shown for legacy BW valves only.
-        - Actuator radio buttons (Handle / Gearbox): shown for flanged valves only.
+        - Actuator radio buttons: shown for flanged and SW/TH valves; the
+          Gearbox option is shown for flanged valves only.
 
         Called from fillSizes() which runs during __init__ (via super().__init__),
         so controls may not exist yet -- guard with hasattr throughout.
@@ -3030,7 +3033,18 @@ class insertValveForm(dodoDialogs.protoPypeForm):
         if hasattr(self, "cb1"):
             self.cb1.setVisible(not is_socket_or_flanged)
         if hasattr(self, "actuatorGroup"):
-            self.actuatorGroup.setVisible(is_flanged)
+            self.actuatorGroup.setVisible(is_socket_or_flanged)
+            self.rbGearbox.setVisible(is_flanged)
+            if not is_flanged and self.rbGearbox.isChecked():
+                self.rbHandle.setChecked(True)
+
+    def _actuator(self):
+        """Actuator string from the radio buttons (default "Handle")."""
+        if hasattr(self, "rbGearbox") and self.rbGearbox.isChecked():
+            return "Gearbox"
+        if hasattr(self, "rbHandleClosed") and self.rbHandleClosed.isChecked():
+            return "Handle-closed"
+        return "Handle"
 
     # ── fillSizes override ───────────────────────────────────────────────────
 
@@ -3164,12 +3178,9 @@ class insertValveForm(dodoDialogs.protoPypeForm):
                     float(pq(r.get("toph", "0"))),
                 ]
                 flgPropList = self._loadFlangePropList(conn, psize)
-                # Read actuator choice from radio buttons (default to "Handle")
-                actuator = "Gearbox" if (hasattr(self, "rbGearbox") and
-                                         self.rbGearbox.isChecked()) else "Handle"
                 self.lastValve = pCmd.doValves(
                     propList, FreeCAD.__activePypeLine__,
-                    flgPropList=flgPropList, actuator=actuator)[-1]
+                    flgPropList=flgPropList, actuator=self._actuator())[-1]
             elif self._isSocketConn():
                 # [DN, VType, OD, ODBody, H, E, Conn, Kv]
                 propList = [
@@ -3182,7 +3193,9 @@ class insertValveForm(dodoDialogs.protoPypeForm):
                     r["conn"],
                     float(pq(r.get("kv", "0"))),
                 ]
-                self.lastValve = pCmd.doValves(propList, FreeCAD.__activePypeLine__)[-1]
+                self.lastValve = pCmd.doValves(
+                    propList, FreeCAD.__activePypeLine__,
+                    actuator=self._actuator())[-1]
             else:
                 # [DN, VType, ODBody, ID, H, Kv]
                 propList = [

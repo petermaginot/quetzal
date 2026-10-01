@@ -67,9 +67,25 @@ def _options_for(view):
 # --------------------------------------------------------------------------
 
 
+_ISO_SOURCE_DOC = "Model objects drawn; empty = whole document"
+
+
+def _migrate_iso_source(view):
+    """Pages made before IsoSource was a global link: convert in place.  A
+    local-scope link makes App::Part pull the view and all its sources into
+    whichever container one of them is added to."""
+    if view.getTypeIdOfProperty("IsoSource") != "App::PropertyLinkList":
+        return
+    src = list(view.IsoSource)
+    view.removeProperty("IsoSource")
+    view.addProperty("App::PropertyLinkListGlobal", "IsoSource", GROUP, _ISO_SOURCE_DOC)
+    view.IsoSource = src
+
+
 def _add_iso_properties(view):
     props = (
-        ("App::PropertyLinkList", "IsoSource", "Model objects drawn; empty = whole document"),
+        # global scope: the view references model objects in any container
+        ("App::PropertyLinkListGlobal", "IsoSource", _ISO_SOURCE_DOC),
         ("App::PropertyFile", "IsoPcfPath", "PCF file drawn, instead of model objects"),
         ("App::PropertyString", "IsoPipeline", "Pipeline reference drawn on this page"),
         ("App::PropertyInteger", "IsoRotation", "View rotation 0-3 in quarter turns about Z (0 = FreeCAD standard isometric); -1 = automatic, fewest clashes"),
@@ -81,6 +97,7 @@ def _add_iso_properties(view):
     for ptype, name, doc in props:
         if not hasattr(view, name):
             view.addProperty(ptype, name, GROUP, doc)
+    _migrate_iso_source(view)
 
 
 def _set_title(template, fields):
@@ -169,6 +186,7 @@ def iso_views(objects):
 
 def update(view):
     """Regenerate an isometric view from its stored inputs."""
+    _add_iso_properties(view)  # bring pages from older versions up to date
     files = _pcf_files_for(view)
     match = [pf for pf in files if pf.pipeline_reference == view.IsoPipeline]
     if not match:

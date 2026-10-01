@@ -2307,7 +2307,7 @@ class Valve(pypeType):
             obj.addProperty(
                 "App::PropertyString", "Actuator", "Valve",
                 QT_TRANSLATE_NOOP("App::Property",
-                                  "Actuator type: Handle or Gearbox"),
+                                  "Actuator type: Handle, Handle-closed or Gearbox"),
             ).Actuator = actuator
             obj.addProperty(
                 "App::PropertyLength", "BottomH", "Valve",
@@ -2339,6 +2339,11 @@ class Valve(pypeType):
                 QT_TRANSLATE_NOOP("App::Property",
                                   "Connection type: SW = Socket Weld, TH = Threaded"),
             ).Conn = Conn
+            obj.addProperty(
+                "App::PropertyString", "Actuator", "Valve",
+                QT_TRANSLATE_NOOP("App::Property",
+                                  "Actuator type: Handle or Handle-closed"),
+            ).Actuator = actuator
         else:
             # -- Generic (legacy) valve properties --------------------------
             obj.addProperty(
@@ -2350,6 +2355,25 @@ class Valve(pypeType):
 
     def onChanged(self, fp, prop):
         return None
+
+    def onDocumentRestored(self, fp):
+        # SW/TH valves created before the Actuator property existed get it
+        # here (open handle) so it can be switched in the property editor.
+        if str(getattr(fp, "Conn", "")).strip() in ("SW", "TH") and \
+                "Actuator" not in fp.PropertiesList:
+            fp.addProperty(
+                "App::PropertyString", "Actuator", "Valve",
+                QT_TRANSLATE_NOOP("App::Property",
+                                  "Actuator type: Handle or Handle-closed"),
+            ).Actuator = "Handle"
+
+    @staticmethod
+    def _orientHandle(handle, actuator):
+        """Turn the stem + paddle 90 deg about the stem (local Y) axis when
+        the actuator is "Handle-closed"; the open handle lies along the flow."""
+        if str(actuator).strip().lower() == "handle-closed":
+            handle.rotate(FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 1, 0), 90)
+        return handle
 
     def execute(self, fp):
         H = float(fp.Height)
@@ -2633,7 +2657,7 @@ class Valve(pypeType):
             if prism2:
                 handle = handle.fuse(prism2)
 
-            valve = valve.fuse(stem)
+            handle = self._orientHandle(stem.fuse(handle), actuator)
             valve = valve.fuse(handle)
             valve = valve.cut(bore)
             valve = valve.removeSplitter()
@@ -2920,8 +2944,9 @@ class Valve(pypeType):
         if prism2:
             handle = handle.fuse(prism2)
 
-        valve = body.fuse(stem)
-        valve = valve.fuse(handle)
+        handle = self._orientHandle(stem.fuse(handle),
+                                    getattr(fp, "Actuator", "Handle"))
+        valve = body.fuse(handle)
         valve = valve.removeSplitter()
         fp.Shape = valve
 
