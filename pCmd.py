@@ -2334,6 +2334,8 @@ def makeValve(propList=[], pos=None, Z=None, flgPropList=None, actuator="Handle"
       Conn    (string): pressure class, e.g. "150lb"
       BottomH (float) : lower body envelope from centerline [optional]
       TopH    (float) : upper body envelope from centerline [optional]
+                        (gate valves: centerline to stem top, gate open)
+      WheelD  (float) : handwheel diameter, gate valves [optional, 0 = 0.9 H]
 
     flgPropList — list of blind-flange properties read from the matching
       Flange_ASME-BL-RF-<Conn>.csv table.  Elements in order:
@@ -2343,6 +2345,8 @@ def makeValve(propList=[], pos=None, Z=None, flgPropList=None, actuator="Handle"
 
     actuator -- "Handle" (default), "Handle-closed", or "Gearbox".  Applies to
       flanged and SW/TH valves; "Gearbox" is drawn for flanged valves only.
+      Flanged gate valves take "Handwheel", "Handwheel-closed", "Gearbox" or
+      "Gearbox-closed" ("Handle" is drawn as a handwheel).
 
     pos (Vector): insertion point; default = origin
     Z   (Vector): flow-axis direction; default = (0,0,1)
@@ -2364,6 +2368,7 @@ def makeValve(propList=[], pos=None, Z=None, flgPropList=None, actuator="Handle"
         Conn  = str(propList[4]) if len(propList) > 4 else "150lb"
         bottomH = float(propList[5]) if len(propList) > 5 else 0.0
         topH    = float(propList[6]) if len(propList) > 6 else 0.0
+        wheelD  = float(propList[7]) if len(propList) > 7 else 0.0
         # flgPropList: [PSize, FlangeType, D, t, f, n, df, drf, trf]
         flgD   = float(flgPropList[2]) if len(flgPropList) > 2 else 0.0
         flgt   = float(flgPropList[3]) if len(flgPropList) > 3 else 0.0
@@ -2375,7 +2380,8 @@ def makeValve(propList=[], pos=None, Z=None, flgPropList=None, actuator="Handle"
         pFeatures.Valve(a, DN=DN, VType=VType, H=H, Kv=Kv, Conn=Conn,
                         flgD=flgD, flgt=flgt, flgdrf=flgdrf, flgtrf=flgtrf,
                         flgdf=flgdf, flgf=flgf, flgn=flgn,
-                        actuator=actuator, bottomH=bottomH, topH=topH)
+                        actuator=actuator, bottomH=bottomH, topH=topH,
+                        wheelD=wheelD)
     elif propList:
         # Detect socket/threaded variant by the presence of a "Conn" field.
         # Convention: propList for the SW/TH path carries Conn as element [6]
@@ -2420,6 +2426,8 @@ def doValves(propList=["DN50", "ball", 72, 50, 40, 150], pypeline=None, pos=0,
                    When supplied the flanged construction path is used.
                    Elements: [PSize, FlangeType, D, t, f, n, df, drf, trf]
     actuator    -- "Handle" (default), "Handle-closed", or "Gearbox" (flanged only).
+                   Flanged gate valves: "Handwheel", "Handwheel-closed",
+                   "Gearbox" or "Gearbox-closed".
     """
     color  = 0.05, 0.3, 0.75
     vlist  = []

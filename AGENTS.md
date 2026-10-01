@@ -74,7 +74,7 @@ classes with `Conn = "TH"`.
 
 ## Working in the live FreeCAD session over MCP
 
-See also the `quetzal-piping` skill in the AI_Piping_Design repo (§2 and §10)
+See also the `quetzal-piping` skill in the AI_Piping_Design repo ([§2 and §10](https://github.com/petermaginot/AI_Piping_Design))
 for the session preamble and verification recipe.
 
 - **FreeCAD runs the installed copy** (`%APPDATA%\FreeCAD\v1-1\Mod\Quetzal`),

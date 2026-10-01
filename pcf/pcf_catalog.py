@@ -428,7 +428,8 @@ def _valve(comp, ctx):
         _score, cls, row = best
         props = {"PSize": dn, "PRating": row.get("VType", family), "Height": length,
                  "Kv": num(row.get("Kv")), "Conn": cls, "BottomH": num(row.get("BottomH")),
-                 "TopH": num(row.get("TopH")), "Actuator": "Handle"}
+                 "TopH": num(row.get("TopH")), "WheelD": num(row.get("WheelD")),
+                 "Actuator": "Handwheel" if family == "Gate" else "Handle"}
         props.update(_blind_flange_props(cls, dn))
         return props
 

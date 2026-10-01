@@ -2858,10 +2858,12 @@ class insertValveForm(dodoDialogs.protoPypeForm):
 
     Flanged  (CSV has Conn == pressure class)
     -------------------------------------------------------
-      CSV columns : Psize ; Vtype ; H ; Kv ; Conn [; BottomH ; TopH]
+      CSV columns : Psize ; Vtype ; H ; Kv ; Conn [; BottomH ; TopH ; WheelD]
       sizeList    : PSize   H
-      propList    : [DN, VType, H, Kv, Conn, BottomH, TopH]
+      propList    : [DN, VType, H, Kv, Conn, BottomH, TopH, WheelD]
       Flange bolt pattern comes from Flange_ASME-BL-RF-<Conn>.csv.
+      Gate tables (VType Gate_*) offer Handwheel / Gearbox actuators, each
+      open or closed, in place of Handle / Handle (closed) / Gearbox.
 
     A rotation dial lets the last-inserted valve be spun around its
     flow axis (Z) in 15-degree increments, identical to insertElbowForm.
@@ -2940,10 +2942,12 @@ class insertValveForm(dodoDialogs.protoPypeForm):
         self.rbHandle       = QRadioButton(translate("insertValveForm", "Handle"))
         self.rbHandleClosed = QRadioButton(translate("insertValveForm", "Handle (closed)"))
         self.rbGearbox      = QRadioButton(translate("insertValveForm", "Gearbox"))
+        self.rbGearboxClosed = QRadioButton(translate("insertValveForm", "Gearbox (closed)"))
         self.rbHandle.setChecked(True)
         self.actuatorGroup.layout().addWidget(self.rbHandle)
         self.actuatorGroup.layout().addWidget(self.rbHandleClosed)
         self.actuatorGroup.layout().addWidget(self.rbGearbox)
+        self.actuatorGroup.layout().addWidget(self.rbGearboxClosed)
         self.secondCol.layout().addWidget(self.actuatorGroup)
 
         # Now that sli, cb1, and actuator controls exist, apply the correct visibility
@@ -2967,6 +2971,15 @@ class insertValveForm(dodoDialogs.protoPypeForm):
         """Return True when the loaded CSV is a flanged (pressure-class) table."""
         for row in self.pipeDictList:
             if row.get("Conn", "").strip() in self._FLANGE_CONNS:
+                return True
+        return False
+
+    def _isGateTable(self):
+        """Return True when the loaded CSV is a flanged gate valve table."""
+        if not self._isFlangedConn():
+            return False
+        for row in self.pipeDictList:
+            if self._normRow(row).get("vtype", "").lower().startswith("gate"):
                 return True
         return False
 
@@ -3023,7 +3036,9 @@ class insertValveForm(dodoDialogs.protoPypeForm):
 
         - "Insert in pipe" slider/checkbox: shown for legacy BW valves only.
         - Actuator radio buttons: shown for flanged and SW/TH valves; the
-          Gearbox option is shown for flanged valves only.
+          Gearbox option is shown for flanged valves only.  Gate tables
+          relabel them Handwheel / Handwheel (closed) / Gearbox and add
+          Gearbox (closed).
 
         Called from fillSizes() which runs during __init__ (via super().__init__),
         so controls may not exist yet -- guard with hasattr throughout.
@@ -3036,17 +3051,32 @@ class insertValveForm(dodoDialogs.protoPypeForm):
             self.cb1.setVisible(not is_socket_or_flanged)
         if hasattr(self, "actuatorGroup"):
             self.actuatorGroup.setVisible(is_socket_or_flanged)
+            is_gate = self._isGateTable()
             self.rbGearbox.setVisible(is_flanged)
-            if not is_flanged and self.rbGearbox.isChecked():
+            self.rbGearboxClosed.setVisible(is_gate)
+            if is_gate:
+                self.rbHandle.setText(translate("insertValveForm", "Handwheel"))
+                self.rbHandleClosed.setText(
+                    translate("insertValveForm", "Handwheel (closed)"))
+            else:
+                self.rbHandle.setText(translate("insertValveForm", "Handle"))
+                self.rbHandleClosed.setText(
+                    translate("insertValveForm", "Handle (closed)"))
+            if (not is_flanged and self.rbGearbox.isChecked()) or \
+                    (not is_gate and self.rbGearboxClosed.isChecked()):
                 self.rbHandle.setChecked(True)
 
     def _actuator(self):
-        """Actuator string from the radio buttons (default "Handle")."""
+        """Actuator string from the radio buttons (default "Handle", or
+        "Handwheel" for gate valves)."""
+        gate = self._isGateTable()
+        if hasattr(self, "rbGearboxClosed") and self.rbGearboxClosed.isChecked():
+            return "Gearbox-closed"
         if hasattr(self, "rbGearbox") and self.rbGearbox.isChecked():
             return "Gearbox"
         if hasattr(self, "rbHandleClosed") and self.rbHandleClosed.isChecked():
-            return "Handle-closed"
-        return "Handle"
+            return "Handwheel-closed" if gate else "Handle-closed"
+        return "Handwheel" if gate else "Handle"
 
     # ── fillSizes override ───────────────────────────────────────────────────
 
@@ -3167,7 +3197,7 @@ class insertValveForm(dodoDialogs.protoPypeForm):
 
             if self._isFlangedConn():
                 # Flanged valve
-                # propList: [DN, VType, H, Kv, Conn, BottomH, TopH]
+                # propList: [DN, VType, H, Kv, Conn, BottomH, TopH, WheelD]
                 psize = r["psize"]
                 conn  = r["conn"]
                 propList = [
@@ -3178,6 +3208,7 @@ class insertValveForm(dodoDialogs.protoPypeForm):
                     conn,
                     float(pq(r.get("bottomh", "0"))),
                     float(pq(r.get("toph", "0"))),
+                    float(pq(r.get("wheeld", "0"))),
                 ]
                 flgPropList = self._loadFlangePropList(conn, psize)
                 self.lastValve = pCmd.doValves(
@@ -3246,6 +3277,8 @@ class insertValveForm(dodoDialogs.protoPypeForm):
                     obj.BottomH = pq(r.get("bottomh", "0"))
                 if hasattr(obj, "TopH"):
                     obj.TopH = pq(r.get("toph", "0"))
+                if hasattr(obj, "WheelD"):
+                    obj.WheelD = pq(r.get("wheeld", "0"))
 
                 flg = self._loadFlangePropList(r["conn"], r["psize"])
                 if flg:

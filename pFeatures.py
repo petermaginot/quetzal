@@ -2246,11 +2246,15 @@ class Valve(pypeType):
     # Pressure-class strings that indicate a flanged connection
     FLANGE_CONNS = ("150lb", "300lb", "600lb", "900lb", "1500lb", "2500lb")
 
+    _FLANGED_ACTUATOR_DOC = ("Actuator type: Handle, Handle-closed or Gearbox; "
+                             "gate valves: Handwheel, Handwheel-closed, "
+                             "Gearbox or Gearbox-closed")
+
     def __init__(self, obj, DN="DN50", VType="ball", ODBody=72, ID=50, H=40, Kv=150,
                  OD=None, E=None, Conn=None,
                  flgD=0, flgt=0, flgdrf=0, flgtrf=0,
                  flgdf=0, flgf=0, flgn=0,
-                 actuator="Handle", bottomH=0, topH=0):
+                 actuator="Handle", bottomH=0, topH=0, wheelD=0):
         super(Valve, self).__init__(obj)
         obj.Proxy   = self
         obj.PType   = "Valve"
@@ -2307,8 +2311,7 @@ class Valve(pypeType):
             ).FlgN = int(flgn)
             obj.addProperty(
                 "App::PropertyString", "Actuator", "Valve",
-                QT_TRANSLATE_NOOP("App::Property",
-                                  "Actuator type: Handle, Handle-closed or Gearbox"),
+                QT_TRANSLATE_NOOP("App::Property", self._FLANGED_ACTUATOR_DOC),
             ).Actuator = actuator
             obj.addProperty(
                 "App::PropertyLength", "BottomH", "Valve",
@@ -2320,6 +2323,11 @@ class Valve(pypeType):
                 QT_TRANSLATE_NOOP("App::Property",
                                   "Upper body envelope from valve centerline"),
             ).TopH = topH
+            obj.addProperty(
+                "App::PropertyLength", "WheelD", "Valve",
+                QT_TRANSLATE_NOOP("App::Property",
+                                  "Handwheel diameter (gate valves), 0 = derived"),
+            ).WheelD = wheelD
 
         elif Conn is not None:
             # -- Socket-weld / Threaded valve properties ---------------------
@@ -2367,6 +2375,15 @@ class Valve(pypeType):
                 QT_TRANSLATE_NOOP("App::Property",
                                   "Actuator type: Handle or Handle-closed"),
             ).Actuator = "Handle"
+        # Flanged valves created before the WheelD property existed.
+        if str(getattr(fp, "Conn", "")).strip() in \
+                ("150lb", "300lb", "600lb", "900lb", "1500lb", "2500lb") and \
+                "WheelD" not in fp.PropertiesList:
+            fp.addProperty(
+                "App::PropertyLength", "WheelD", "Valve",
+                QT_TRANSLATE_NOOP("App::Property",
+                                  "Handwheel diameter (gate valves), 0 = derived"),
+            ).WheelD = 0
 
     @staticmethod
     def _orientHandle(handle, actuator):
@@ -2375,6 +2392,103 @@ class Valve(pypeType):
         if str(actuator).strip().lower() == "handle-closed":
             handle.rotate(FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 1, 0), 90)
         return handle
+
+    @staticmethod
+    def _blFlange(fp, z_face, face_up):
+        """Return a solid blind flange (BL style) from the valve's Flg*
+        properties, positioned so that its raised-face surface lies at
+        z = z_face.
+        face_up=True  -> flange body extends in +Z, raised face in -Z
+        face_up=False -> flange body extends in -Z, raised face in +Z
+        """
+        flgD   = float(fp.FlgD)
+        flgt   = float(fp.Flgt)
+        flgDrf = float(fp.FlgDrf)
+        flgTrf = float(fp.FlgTrf)
+        flgDf  = float(fp.FlgDf)
+        flgF   = float(fp.FlgF)
+        flgN   = int(fp.FlgN)
+        sign = 1.0 if face_up else -1.0
+
+        # Disc (no bore for BL) with bolt holes, rotated to match the
+        # standard Flange class offset
+        base = Part.Face(Part.Wire(Part.makeCircle(flgD / 2.0)))
+        if flgN > 0 and flgF > 0 and flgDf > 0:
+            hole = Part.Face(
+                Part.Wire(
+                    Part.makeCircle(
+                        flgF / 2.0,
+                        FreeCAD.Vector(flgDf / 2.0, 0, 0),
+                        FreeCAD.Vector(0, 0, 1),
+                    )
+                )
+            )
+            hole.rotate(FreeCAD.Vector(0, 0, 0),
+                        FreeCAD.Vector(0, 0, 1), 360.0 / flgN / 2.0)
+            for i in range(flgN):
+                base = base.cut(hole)
+                hole.rotate(FreeCAD.Vector(0, 0, 0),
+                            FreeCAD.Vector(0, 0, 1), 360.0 / flgN)
+
+        # Extrude disc body away from the face
+        flange = base.extrude(FreeCAD.Vector(0, 0, sign * flgt))
+
+        # Raised face toward the mating side
+        if flgTrf > 0 and flgDrf > 0:
+            rf = Part.makeCylinder(
+                flgDrf / 2.0, flgTrf,
+                FreeCAD.Vector(0, 0, 0),
+                FreeCAD.Vector(0, 0, -sign),
+            )
+            flange = flange.fuse(rf)
+
+        # Translate so the mating face lands at z_face
+        flange.translate(FreeCAD.Vector(0, 0, z_face + flgTrf * sign))
+        return flange
+
+    @staticmethod
+    def _gearboxWheel(axle_base, pipe_od):
+        """Return the gearbox handwheel: axle, four spokes and rim.
+
+        The axle starts at axle_base and runs pipe_od/2 along +X.  Four
+        spokes (radius 10 mm) leave its far end at 60 deg from X toward
+        +/-Y and +/-Z; the rim is a torus about X with radius pipe_od + 75
+        and tube radius 12, centred where the spokes meet it.
+        """
+        import math
+        # -- Handwheel axle: diameter = min(25.4, pipe_od)
+        axle_r   = min(25.4, pipe_od) / 2.0
+        axle_len = pipe_od / 2.0
+        wheel = Part.makeCylinder(axle_r, axle_len, axle_base,
+                                  FreeCAD.Vector(1, 0, 0))
+
+        # -- Four spokes around the axle
+        spoke_len    = (pipe_od + 75.0) / math.cos(math.radians(30.0))
+        spoke_r      = 10.0
+        spoke_origin = FreeCAD.Vector(axle_base.x + axle_len,
+                                      axle_base.y, axle_base.z)
+        spoke_angle = 60  # degrees
+        cos60 = math.cos(math.radians(spoke_angle))
+        sin60 = math.sin(math.radians(spoke_angle))
+        spoke_dirs = [
+            FreeCAD.Vector(cos60,  sin60, 0),   # +Y quadrant
+            FreeCAD.Vector(cos60, -sin60, 0),   # -Y quadrant
+            FreeCAD.Vector(cos60, 0,  sin60),   # +Z quadrant
+            FreeCAD.Vector(cos60, 0, -sin60),   # -Z quadrant
+        ]
+        spokes = None
+        for sd in spoke_dirs:
+            spoke = Part.makeCylinder(spoke_r, spoke_len, spoke_origin, sd)
+            spokes = spoke if spokes is None else spokes.fuse(spoke)
+
+        # -- Handwheel torus, axis = X (same as axle)
+        torus_cx = spoke_origin.x + spoke_len * math.sin(math.radians(90 - spoke_angle))
+        torus = Part.makeTorus(
+            pipe_od + 75.0, 12.0,
+            FreeCAD.Vector(torus_cx, spoke_origin.y, spoke_origin.z),
+            FreeCAD.Vector(1, 0, 0),
+        )
+        return wheel.fuse(spokes).fuse(torus)
 
     def execute(self, fp):
         H = float(fp.Height)
@@ -2387,6 +2501,8 @@ class Valve(pypeType):
             rating = getattr(fp, "PRating", "").lower()
             if "check_swing" in rating or "swing_check" in rating:
                 self._execute_swing_check_valve(fp, H)
+            elif rating.startswith("gate"):
+                self._execute_gate(fp, H)
             else:
                 self._execute_flanged(fp, H)
         elif conn is not None:
@@ -2417,15 +2533,9 @@ class Valve(pypeType):
 
         Ports are at (0,0,-H/2) and (0,0,+H/2).
         """
-        import math
-
         flgD   = float(fp.FlgD)    # flange outer diameter
         flgt   = float(fp.Flgt)    # flange thickness (t in the table)
         flgDrf = float(fp.FlgDrf)  # raised-face diameter
-        flgTrf = float(fp.FlgTrf)  # raised-face thickness
-        flgDf  = float(fp.FlgDf)   # bolt-circle diameter
-        flgF   = float(fp.FlgF)    # bolt-hole diameter
-        flgN   = int(fp.FlgN)      # number of bolt holes
 
         # Pipe OD for the nominal size from the module-level dictionary
         pipe_od = pipe_OD.get(fp.PSize, float(fp.ODBody))
@@ -2438,59 +2548,8 @@ class Valve(pypeType):
         if body_h < 1.0:
             body_h = 1.0  # safety floor
 
-        # ── build one blind flange (BL style) ──────────────────────────────
-        # The Flange.execute() path for "BL" builds from z=0 upward for
-        # thickness (t ), with raised face going downward (toward -Z).
-        # Here we replicate that geometry directly as Part solids so we can
-        # position each flange independently.
-
-        def make_bl_flange(z_face, face_up):
-            """Return a solid blind flange positioned so that its mating
-            face (raised-face surface) lies at z = z_face.
-            face_up=True  -> flange body extends in +Z, raised face in -Z
-            face_up=False -> flange body extends in -Z, raised face in +Z
-            """
-            sign = 1.0 if face_up else -1.0
-
-            # Annular disc (flange body, no bore for BL)
-            base = Part.Face(Part.Wire(Part.makeCircle(flgD / 2)))
-            # Cut bolt holes, rotated to match standard Flange class offset
-            if flgN > 0:
-                hole = Part.Face(
-                    Part.Wire(
-                        Part.makeCircle(
-                            flgF / 2,
-                            FreeCAD.Vector(flgDf / 2, 0, 0),
-                            FreeCAD.Vector(0, 0, 1),
-                        )
-                    )
-                )
-                hole.rotate(FreeCAD.Vector(0, 0, 0),
-                            FreeCAD.Vector(0, 0, 1), 360.0 / flgN / 2)
-                for i in range(flgN):
-                    base = base.cut(hole)
-                    hole.rotate(FreeCAD.Vector(0, 0, 0),
-                                FreeCAD.Vector(0, 0, 1), 360.0 / flgN)
-
-            # Extrude disc body away from the face
-            body_thickness = flgt
-            flange = base.extrude(FreeCAD.Vector(0, 0, sign * body_thickness))
-
-            # Raised face (solid disc, no bore for BL) toward the mating side
-            if flgTrf > 0 and flgDrf > 0:
-                rf = Part.makeCylinder(
-                    flgDrf / 2, flgTrf,
-                    FreeCAD.Vector(0, 0, 0),
-                    FreeCAD.Vector(0, 0, -sign),
-                )
-                flange = flange.fuse(rf)
-
-            # Translate so the mating face lands at z_face
-            flange.translate(FreeCAD.Vector(0, 0, z_face + flgTrf * sign))
-            return flange
-
-        flange_bot = make_bl_flange(-H / 2.0, face_up=True)   # mating face at -H/2
-        flange_top = make_bl_flange( H / 2.0, face_up=False)  # mating face at +H/2
+        flange_bot = self._blFlange(fp, -H / 2.0, face_up=True)   # mating face at -H/2
+        flange_top = self._blFlange(fp,  H / 2.0, face_up=False)  # mating face at +H/2
 
         # ── connecting (outer) cylinder ────────────────────────────────────
         conn_cyl = Part.makeCylinder(
@@ -2534,68 +2593,12 @@ class Valve(pypeType):
                 FreeCAD.Vector(0, 1, 0),
             )
 
-            # -- Handwheel axle -----------------------------------------
-            # Cylinder based at (0, pipe_od+100, -pipe_od/2)
-            # diameter = min(25.4, pipe_od), length = pipe_od/2, direction +X
-            axle_r  = min(25.4, pipe_od) / 2.0
-            axle_len = pipe_od/2
-            axle_base = FreeCAD.Vector(0, pipe_od + 100.0, -pipe_od / 2.0)
-            axle = Part.makeCylinder(
-                axle_r, axle_len,
-                axle_base,
-                FreeCAD.Vector(1, 0, 0),
-            )
-
-            # -- Four spokes around the axle ----------------------------
-            # Spokes originate at the far end of the axle:
-            #   spoke_origin = axle_base + (pipe_od, 0, 0)
-            # They are extruded at 60 deg from the X axis in the four
-            # +/-Y and +/-Z quadrants, each of length spoke_len, radius 10 mm.
-            spoke_len    = (pipe_od + 75.0) / math.cos(math.radians(30.0))
-            spoke_r      = 10.0
-            spoke_origin = FreeCAD.Vector(
-                axle_base.x + axle_len,
-                axle_base.y,
-                axle_base.z,
-            )
-            # The four spoke directions are at 60 deg from X toward +Y, -Y, +Z, -Z
-            spoke_angle = 60 #degrees
-            cos60 = math.cos(math.radians(spoke_angle))
-            sin60 = math.sin(math.radians(spoke_angle))
-            spoke_dirs = [
-                FreeCAD.Vector(cos60,  sin60, 0),   # +Y quadrant
-                FreeCAD.Vector(cos60, -sin60, 0),   # -Y quadrant
-                FreeCAD.Vector(cos60, 0,  sin60),   # +Z quadrant
-                FreeCAD.Vector(cos60, 0, -sin60),   # -Z quadrant
-            ]
-            spokes = None
-            for sd in spoke_dirs:
-                spoke = Part.makeCylinder(
-                    spoke_r, spoke_len,
-                    spoke_origin,
-                    sd,
-                )
-                spokes = spoke if spokes is None else spokes.fuse(spoke)
-
-            # -- Handwheel torus ----------------------------------------
-            # Center of the torus is at:
-            #   x = spoke_origin.x + (pipe_od + 75) * sin(30 deg)
-            #   y = spoke_origin.y, z = spoke_origin.z
-            # Torus axis = X axis (same as axle)
-            # Radius1 = pipe_od + 75, Radius2 = 12
-            torus_cx = spoke_origin.x + spoke_len * math.sin(math.radians(90-spoke_angle))
-            torus_center = FreeCAD.Vector(torus_cx, spoke_origin.y, spoke_origin.z)
-            torus = Part.makeTorus(
-                pipe_od + 75.0, 12.0,
-                torus_center,
-                FreeCAD.Vector(1, 0, 0),
-            )
+            # -- Handwheel on a horizontal axle at the gearbox top -------
+            wheel = self._gearboxWheel(
+                FreeCAD.Vector(0, pipe_od + 100.0, -pipe_od / 2.0), pipe_od)
 
             valve = valve.fuse(gearbox)
-            valve = valve.fuse(axle)
-            if spokes is not None:
-                valve = valve.fuse(spokes)
-            valve = valve.fuse(torus)
+            valve = valve.fuse(wheel)
             valve = valve.cut(bore)
             valve = valve.removeSplitter()
             fp.Shape = valve
@@ -2674,6 +2677,207 @@ class Valve(pypeType):
             FreeCAD.Vector(0, 0, -1),
         ]
 
+    def _execute_gate(self, fp, H):
+        """Build a flanged OS&Y gate valve with a wedge gate.
+
+        Local Z is the flow axis, +Y is the stem axis, origin at the body
+        center; ports at the flange faces like the other flanged valves.
+
+        Actuator
+          Handwheel / Handwheel-closed : horizontal handwheel on the yoke nut
+          Gearbox   / Gearbox-closed   : bevel gearbox on the yoke with the
+                                         ball-valve gearbox handwheel and a
+                                         stem protector tube
+          "-closed" drops the gate into the bore and the stem by the gate
+          travel.  Handle / Handle-closed (ball-valve values, found on older
+          documents) are treated as Handwheel / Handwheel-closed.
+
+        Table mapping and proportions (pipe_od from the PSize, mm)
+          TopH   : centerline to the top of the stem with the gate open;
+                   for a gearbox, to the top of its handwheel or stem
+                   protector, whichever is higher.  0 or too small for the
+                   body below -> the lowest stack that fits.
+          WheelD : handwheel outside diameter; 0 -> 0.9 x face-to-face H.
+          bore radius   r = 0.95 pipe_od / 2 (as the other flanged valves)
+          gate          width and height 2.2 r, round bottom of radius 1.1 r,
+                        wedge thickness max(10, 0.44 r) at the top, 75 %
+                        of that at the bottom.  Closed: round bottom
+                        centred on the bore axis.  Open: bottom r + c
+                        above the axis, c = 2 + 0.02 r.
+          cavity        the gate envelope plus c, from the closed bottom up
+                        to the open top
+          body, bonnet  cavity plus a wall of max(5, 0.35 Flgt); the body's
+                        flow-direction half-length is at least 0.75 r and
+                        held inside the flanges (H/2 - Flgt - FlgTrf)
+          neck          r + wall, between the body and each flange
+          stem          bare cylinder, radius max(6, 0.08 pipe_od)
+        """
+        import math
+
+        flgt   = float(fp.Flgt)
+        flgDrf = float(fp.FlgDrf)
+        flgTrf = float(fp.FlgTrf)
+        pipe_od = pipe_OD.get(fp.PSize, max(flgDrf * 0.65, 1.0))
+
+        act = str(getattr(fp, "Actuator", "Handwheel")).strip().lower()
+        gearbox = act.startswith("gearbox")
+        closed = act.endswith("-closed")
+
+        V = FreeCAD.Vector
+        bore_r = max(pipe_od * 0.95 / 2.0, 1.0)
+        wall = max(5.0, 0.35 * flgt)
+        c = 2.0 + 0.02 * bore_r
+        rs = max(6.0, 0.08 * pipe_od)
+
+        # -- wedge gate ---------------------------------------------------
+        gr = 1.1 * bore_r                 # half width = bottom radius
+        gh = 2.2 * bore_r                 # height
+        t_top = max(10.0, 0.44 * bore_r)
+        t_bot = 0.75 * t_top
+        closed_bot = -gr
+        open_bot = bore_r + c
+        travel = open_bot - closed_bot
+        gate_bot = closed_bot if closed else open_bot
+        gate_top = gate_bot + gh
+
+        def obround(r, y_center, y_top, half_z):
+            """Round-bottomed slab: a cylinder along Z of radius r centred
+            at y_center, plus a box up to y_top, z in +/-half_z."""
+            cyl = Part.makeCylinder(r, 2.0 * half_z, V(0, y_center, -half_z),
+                                    V(0, 0, 1))
+            box = Part.makeBox(2.0 * r, y_top - y_center, 2.0 * half_z,
+                               V(-r, y_center, -half_z))
+            return cyl.fuse(box)
+
+        taper = Part.Face(Part.makePolygon([
+            V(-gr - 1.0, gate_bot, -t_bot / 2.0),
+            V(-gr - 1.0, gate_bot,  t_bot / 2.0),
+            V(-gr - 1.0, gate_top,  t_top / 2.0),
+            V(-gr - 1.0, gate_top, -t_top / 2.0),
+            V(-gr - 1.0, gate_bot, -t_bot / 2.0),
+        ])).extrude(V(2.0 * gr + 2.0, 0, 0))
+        gate = obround(gr, gate_bot + gr, gate_top, t_top / 2.0).common(taper)
+
+        # -- cavity, body and bonnet -------------------------------------
+        cav_x = gr + c
+        cav_z = t_top / 2.0 + c
+        cav_top = open_bot + gh + c
+        cavity = obround(cav_x, 0.0, cav_top, cav_z)
+
+        Rb = cav_x + wall
+        Rz = min(max(cav_z + wall, 0.75 * bore_r),
+                 max(H / 2.0 - flgt - flgTrf, cav_z + 1.0))
+        y_bf = bore_r + 0.5 * gh          # bonnet flange (body/bonnet joint)
+        body = obround(Rb, 0.0, y_bf, Rz)
+
+        m = wall                          # bonnet flange margin
+        t_bf = max(8.0, 0.6 * flgt)
+        bonnet_flange = Part.makeBox(2.0 * (Rb + m), t_bf, 2.0 * (Rz + m),
+                                     V(-Rb - m, y_bf, -Rz - m))
+        y_bt = cav_top + wall             # bonnet top
+        bonnet = Part.makeBox(2.0 * Rb, y_bt - y_bf, 2.0 * Rz,
+                              V(-Rb, y_bf, -Rz))
+        r_sb = min(max(2.5 * rs, rs + 10.0), Rb)
+        h_sb = max(20.0, 3.0 * rs)        # stuffing box
+        stuffing = Part.makeCylinder(r_sb, h_sb, V(0, y_bt, 0), V(0, 1, 0))
+
+        sleeve = Part.makeCylinder(bore_r + wall, H, V(0, 0, -H / 2.0),
+                                   V(0, 0, 1))
+        valve = self._blFlange(fp, -H / 2.0, face_up=True)
+        valve = valve.fuse(self._blFlange(fp, H / 2.0, face_up=False))
+        for shape in (sleeve, body, bonnet_flange, bonnet, stuffing):
+            valve = valve.fuse(shape)
+
+        bore = Part.makeCylinder(bore_r, H + 2.0 * flgt + 4.0,
+                                 V(0, 0, -H / 2.0 - flgt - 2.0), V(0, 0, 1))
+        valve = valve.cut(bore.fuse(cavity))
+
+        # -- bonnet bolts: studs through the flange along both long sides
+        # and one at each end ---------------------------------------------
+        bolt_r = max(2.5, 0.3 * m)
+        bolt_y0 = y_bf - 0.4 * t_bf
+        bolt_h = 1.9 * t_bf
+        n_side = max(2, int(2.0 * Rb / max(40.0, 8.0 * bolt_r)) + 1)
+        spots = [V(-Rb + 2.0 * Rb * i / (n_side - 1), 0, s * (Rz + m / 2.0))
+                 for i in range(n_side) for s in (-1, 1)]
+        spots += [V(s * (Rb + m / 2.0), 0, 0) for s in (-1, 1)]
+        bolts = [Part.makeCylinder(bolt_r, bolt_h, V(p.x, bolt_y0, p.z),
+                                   V(0, 1, 0)) for p in spots]
+
+        # -- stack above the bonnet: yoke nut, then handwheel or gearbox --
+        h_yn = max(20.0, 3.0 * rs)
+        r_yn = 2.2 * rs
+        if gearbox:
+            gb_h = max(60.0, 0.6 * pipe_od)
+            prot_h = travel + 10.0        # stem protector above the gearbox
+            # The gearbox wheel rim (radius pipe_od + 75, tube 12) is centred
+            # at the gearbox top.
+            above = gb_h + max(prot_h, pipe_od + 87.0)
+        else:
+            wheel_d = float(getattr(fp, "WheelD", 0)) or 0.9 * H
+            rim_r = min(15.0, max(6.0, 0.02 * wheel_d))
+            hub_h = max(15.0, 2.0 * rs, 2.0 * rim_r)
+            stick = max(rs, 10.0)         # stem above the hub when closed
+            above = hub_h + stick + travel
+        y_yn0_min = y_bt + h_sb + max(2.0 * rs, 30.0)
+        top_h = float(getattr(fp, "TopH", 0))
+        y_yn0 = max(top_h - above - h_yn, y_yn0_min)
+        y_yn1 = y_yn0 + h_yn              # yoke nut top
+        top_h = y_yn1 + above             # effective top of the stack
+
+        # Yoke: two legs from the bonnet top to a crossbar holding the nut.
+        leg_w = max(10.0, 1.2 * rs)
+        leg_d = min(max(10.0, 2.0 * rs), 2.0 * Rz)
+        x_leg = max(r_sb + leg_w, 0.6 * Rb)
+        yoke = Part.makeBox(2.0 * (x_leg + leg_w / 2.0), h_yn, leg_d,
+                            V(-x_leg - leg_w / 2.0, y_yn0, -leg_d / 2.0))
+        for s in (-1, 1):
+            yoke = yoke.fuse(Part.makeBox(
+                leg_w, y_yn0 - y_bt + 1.0, leg_d,
+                V(s * x_leg - leg_w / 2.0, y_bt - 1.0, -leg_d / 2.0)))
+        yoke = yoke.fuse(Part.makeCylinder(r_yn, h_yn, V(0, y_yn0, 0),
+                                           V(0, 1, 0)))
+
+        stem_y0 = gate_top - min(rs, 0.25 * gh)
+        if gearbox:
+            gb_top = y_yn1 + gb_h
+            actuator = Part.makeCylinder(pipe_od / 2.0, gb_h, V(0, y_yn1, 0),
+                                         V(0, 1, 0))
+            actuator = actuator.fuse(self._gearboxWheel(
+                V(0, gb_top, -pipe_od / 2.0), pipe_od))
+            actuator = actuator.fuse(Part.makeCylinder(
+                max(1.5 * rs, rs + 5.0), prot_h, V(0, gb_top, 0),
+                V(0, 1, 0)))
+            stem_y1 = gb_top              # hidden in the protector above
+        else:
+            R = wheel_d / 2.0 - rim_r     # rim centre radius
+            y_w = y_yn1 + hub_h / 2.0
+            actuator = Part.makeCylinder(2.0 * rs, hub_h, V(0, y_yn1, 0),
+                                         V(0, 1, 0))
+            actuator = actuator.fuse(Part.makeTorus(R, rim_r, V(0, y_w, 0),
+                                                    V(0, 1, 0)))
+            spoke_r = max(4.0, 0.7 * rim_r)
+            for k in range(4):
+                a = math.radians(45.0 + 90.0 * k)
+                actuator = actuator.fuse(Part.makeCylinder(
+                    spoke_r, R, V(0, y_w, 0), V(math.cos(a), 0, math.sin(a))))
+            stem_y1 = top_h - (travel if closed else 0.0)
+        stem = Part.makeCylinder(rs, stem_y1 - stem_y0, V(0, stem_y0, 0),
+                                 V(0, 1, 0))
+
+        for shape in bolts + [yoke, stem, gate, actuator]:
+            valve = valve.fuse(shape)
+        fp.Shape = valve.removeSplitter()
+
+        fp.Ports = [
+            FreeCAD.Vector(0, 0, H / 2.0),
+            FreeCAD.Vector(0, 0, -H / 2.0),
+        ]
+        fp.PortDirections = [
+            FreeCAD.Vector(0, 0, 1),
+            FreeCAD.Vector(0, 0, -1),
+        ]
+
     def _execute_swing_check_valve(self, fp, H):
         """Build a flanged swing check valve using catalog envelope dimensions.
 
@@ -2685,49 +2889,14 @@ class Valve(pypeType):
         flgD   = float(fp.FlgD)
         flgt   = float(fp.Flgt)
         flgDrf = float(fp.FlgDrf)
-        flgTrf = float(fp.FlgTrf)
-        flgDf  = float(fp.FlgDf)
-        flgF   = float(fp.FlgF)
-        flgN   = int(fp.FlgN)
 
         pipe_od = pipe_OD.get(fp.PSize, max(flgDrf * 0.65, 1.0))
         bore_r = max(pipe_od * 0.95 / 2.0, 1.0)
         bottom_h = float(getattr(fp, "BottomH", 0)) or max(pipe_od * 0.9, flgDrf * 0.45)
         top_h = float(getattr(fp, "TopH", 0)) or max(pipe_od * 1.8, flgD * 0.85)
 
-        def make_bl_flange(z_face, face_up):
-            sign = 1.0 if face_up else -1.0
-            base = Part.Face(Part.Wire(Part.makeCircle(flgD / 2.0)))
-            if flgN > 0 and flgF > 0 and flgDf > 0:
-                hole = Part.Face(
-                    Part.Wire(
-                        Part.makeCircle(
-                            flgF / 2.0,
-                            FreeCAD.Vector(flgDf / 2.0, 0, 0),
-                            FreeCAD.Vector(0, 0, 1),
-                        )
-                    )
-                )
-                hole.rotate(FreeCAD.Vector(0, 0, 0),
-                            FreeCAD.Vector(0, 0, 1), 360.0 / flgN / 2.0)
-                for i in range(flgN):
-                    base = base.cut(hole)
-                    hole.rotate(FreeCAD.Vector(0, 0, 0),
-                                FreeCAD.Vector(0, 0, 1), 360.0 / flgN)
-
-            flange = base.extrude(FreeCAD.Vector(0, 0, sign * flgt))
-            if flgTrf > 0 and flgDrf > 0:
-                rf = Part.makeCylinder(
-                    flgDrf / 2.0, flgTrf,
-                    FreeCAD.Vector(0, 0, 0),
-                    FreeCAD.Vector(0, 0, -sign),
-                )
-                flange = flange.fuse(rf)
-            flange.translate(FreeCAD.Vector(0, 0, z_face + flgTrf * sign))
-            return flange
-
-        flange_bot = make_bl_flange(-H / 2.0, face_up=True)
-        flange_top = make_bl_flange(H / 2.0, face_up=False)
+        flange_bot = self._blFlange(fp, -H / 2.0, face_up=True)
+        flange_top = self._blFlange(fp, H / 2.0, face_up=False)
 
         sleeve_r = max(flgDrf / 2.0, bore_r + max(6.0, flgt * 0.35))
         sleeve = Part.makeCylinder(
